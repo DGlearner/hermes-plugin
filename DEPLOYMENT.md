@@ -94,5 +94,8 @@ tags:
   production Compose file.
 
 Production must use the explicit Hermes version tag. If the GHCR package is
-private, authenticate the server once with a GitHub token that has only
-package-read permission before running `docker compose pull`.
+public, as it is for the current release, no registry login is required. The
+Compose override additionally pins the published digest so a moved tag cannot
+change the production runtime. If package visibility is changed to private,
+authenticate the server once with a GitHub token that has only package-read
+permission before running `docker compose pull`.
