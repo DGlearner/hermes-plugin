@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store
+._*
+
+# Runtime secrets and state must stay outside Git.
+.env
+.env.*
+!.env.example
+*.token
+state.db
+state.db-*
+profiles/
+cache/
+provisioner/
+*.log

@@ -1,0 +1,14 @@
+name: profile-rag-mcp
+version: 0.7.0
+description: >
+  Profile-aware proxy for the XXP RAG MCP service. Each tool call
+  reads the active Hermes profile's employee PAT and forwards one JSON-RPC
+  request without creating a persistent MCP connection. Multiplex Profile
+  routes and authorization stores are refreshed after provisioning without
+  restarting the shared Gateway. Current-Session attachment continuity and
+  deterministic knowledge-search intent are stored per Profile and Session.
+author: XXP
+kind: backend
+provides_tools:
+  - analyze_wechat_attachment
+  - upload_wechat_knowledge_attachment
