@@ -1,0 +1,4 @@
+services:
+  gateway:
+    image: ghcr.io/dglearner/hermes-agent-base:0.20.5
+    pull_policy: if_not_present

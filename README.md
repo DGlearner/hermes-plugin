@@ -17,6 +17,12 @@ For a fresh server installation, follow [DEPLOYMENT.md](DEPLOYMENT.md). The
 plugin and Provisioner must be released together because their cleanup and
 offboarding behavior share the same contract.
 
+The fixed Hermes runtime is published separately by this repository's GitHub
+Actions workflow as `ghcr.io/dglearner/hermes-agent-base:0.20.5`. The large
+base image changes only when the pinned upstream Hermes release changes. The
+plugin remains source-mounted and is upgraded independently through this
+repository's `vX.Y.Z` Git tags.
+
 ## Runtime model
 
 - The active Profile PAT is read from `MCP_COMPANY_MCP_API_KEY` for every call.

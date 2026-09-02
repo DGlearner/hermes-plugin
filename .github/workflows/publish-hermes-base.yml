@@ -1,0 +1,86 @@
+name: Publish Hermes base image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-hermes-base.yml
+      - docker/hermes-base.env
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: hermes-base-image
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: dglearner/hermes-agent-base
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout integration repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read pinned Hermes version
+        id: hermes
+        shell: bash
+        run: |
+          set -euo pipefail
+          source docker/hermes-base.env
+          echo "repository=${HERMES_UPSTREAM_REPOSITORY}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${HERMES_UPSTREAM_REF}" >> "${GITHUB_OUTPUT}"
+          echo "version=${HERMES_UPSTREAM_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "short_ref=${HERMES_UPSTREAM_REF:0:12}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout pinned Hermes source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ steps.hermes.outputs.repository }}
+          ref: ${{ steps.hermes.outputs.ref }}
+          path: hermes-agent
+          persist-credentials: false
+
+      - name: Verify pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_ref="$(git -C hermes-agent rev-parse HEAD)"
+          test "${actual_ref}" = "${{ steps.hermes.outputs.ref }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish pinned Hermes image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: hermes-agent
+          file: hermes-agent/Dockerfile
+          platforms: linux/amd64
+          push: true
+          pull: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.hermes.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.hermes.outputs.short_ref }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:stable
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.hermes.outputs.ref }}
+            org.opencontainers.image.version=${{ steps.hermes.outputs.version }}
+            org.opencontainers.image.title=Hermes Agent base for the XXP Weixin gateway
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
