@@ -1,40 +1,8 @@
 # Hermes Profile-aware RAG MCP plugin
 
-## Release 0.11.0
-
-This release includes the 0.9 original-file Weixin download and knowledge-intent
-continuity changes, the 0.10 local text/MinerU attachment analysis path, and video
-summary uploads. The integrated source and current runtime documentation are in
-`RUNTIME.md`; they supersede the historical workflow descriptions below.
-
-For MP4/MOV/WEBM/MKV uploads, provide `video_summary` and optionally `video_title`
-to `upload_wechat_knowledge_attachment`. The title defaults to the filename.
-Video analysis is not performed; cache quotas, Profile isolation and review rules
-remain in effect. Deploy the matching MCP server before restarting Hermes.
-The Hermes base image stays at its pinned 0.20.5 version.
-
 This plugin exposes the RAG MCP tools through Hermes' supported plugin API.
 It is designed for a multiplex gateway where every employee has a Hermes
 Profile and a different RAG PAT.
-
-## Repository layout
-
-- The repository root is mounted as Hermes' `profile_rag_mcp` backend plugin.
-- `wechat_provisioner/` contains the pairing, Profile provisioning, unbind,
-  and attachment-cleanup integration service.
-- `hermes-wechat-provisioner.compose.yaml` is the production Compose override.
-- Secrets, employee PATs, Profile state databases, chat history, and temporary
-  attachments are runtime data and must never be committed to this repository.
-
-For a fresh server installation, follow [DEPLOYMENT.md](DEPLOYMENT.md). The
-plugin and Provisioner must be released together because their cleanup and
-offboarding behavior share the same contract.
-
-The fixed Hermes runtime is published separately by this repository's GitHub
-Actions workflow as `ghcr.io/dglearner/hermes-agent-base:0.20.5`. The large
-base image changes only when the pinned upstream Hermes release changes. The
-plugin remains source-mounted and is upgraded independently through this
-repository's `vX.Y.Z` Git tags.
 
 ## Runtime model
 
@@ -120,8 +88,7 @@ Temporary-file lifecycle is independent from durable chat history:
   the affected Session or Profile for cleanup without deleting `state.db`.
 - A successful knowledge upload deletes only the Hermes local cache after OSS
   confirmation. Formal knowledge objects are never candidates for this
-  cleaner. Temporary analysis objects use the RAG service's separate staged
-  OSS finalizer.
+  cleaner. Local temporary analysis creates no OSS objects.
 - Analysis and upload tools hold process-global reference-counted leases in a
   `finally`-safe context. Cleanup skips leased files and retries a pending
   deletion after the final lease is released.
@@ -187,17 +154,40 @@ including those retained after the daily 04:00 rotation. Short Chinese
 references such as “刚才”“这个”“继续” are resolved from the live Session and
 active attachment rather than FTS5 keyword matching.
 
+Hermes owns semantic interpretation and selection of `search_knowledge`. The
+plugin only verifies that the request has current real-user context, is not an
+explicit rejection of knowledge retrieval, and is not solely a request to
+resume analysis of the current temporary attachment. A successful or explicit
+knowledge search records a marker, without query text, in the current Profile's
+current Session. Follow-ups such as “再看看类似方案” may inherit that scope.
+Explicit negation, switching back to the current attachment, `/new`, and
+automatic Session rotation clear it; it is never shared across Profiles or
+Sessions. Plugin-generated errors include `source: "profile_rag_mcp"`.
+
 The restart settings let active turns finish before the container exits;
 combine them with a Docker `stop_grace_period` longer than the drain timeout.
 
 ## Employee tools and Weixin attachments
 
+Version 0.11.0 also accepts cached MP4/MOV/WEBM/MKV attachments for knowledge upload.
+Use `upload_wechat_knowledge_attachment` with a user-provided `video_summary` and optional
+`video_title` (defaults to the filename). No duration or timeline is required. The server indexes
+the description and labels it summary-only; it does not parse video. Never invent visual/audio
+details. `analyze_wechat_attachment` rejects videos explicitly. The existing 25 MiB attachment
+limit, Profile/Session grants, processing leases and cleanup remain in force. Upgrade the MCP
+server first, then reload this plugin by restarting Hermes. No base-image upgrade is needed.
+
 Employee Weixin Profiles enable only `web`, `vision`, `session_search`,
 `clarify`, and `profile_rag_mcp`. The RAG toolset consumes the MCP server's
-released catalog plus two local attachment tools. The plugin does not maintain
+released catalog plus three local attachment tools. The plugin does not maintain
 a second Tool allowlist: publication and role visibility belong to the original
 MCP service, while every `tools/call` remains subject to the same server-side
 policy and domain authorization.
+
+At registration time the plugin replaces only the two knowledge-search tool
+descriptions with the Profile/Session continuity policy above. The MCP server
+still owns tool publication, input schemas, PAT authorization, role visibility,
+and domain access control.
 
 The first production catalog deliberately excludes requirement and task Tools.
 An employee PAT receives 19 identity, directory, knowledge, transfer, and daily
@@ -207,7 +197,7 @@ released catalog including archive, restore, and purge governance. Requirement
 and task code remains registered for development, but only `system_admin` can
 discover or call it until a later production release.
 
-The local attachment tools accept only document, source-code, or image paths captured from Hermes'
+The local attachment tools accept only document, source-code, image, or supported video paths captured from Hermes'
 Weixin adapter for the current Profile and Session. They reject arbitrary
 paths, symlinks, modified files, expired grants, unsupported extensions, and
 files larger than 25 MiB. Supported formats are DOCX/DOC, PDF, PPTX/PPT,
@@ -239,9 +229,10 @@ gateway:
   sections from across the file plus an explicit truncation warning. The most
   recently analyzed attachment is recorded per Profile and Session with a
   bounded excerpt, so follow-ups such as “继续分析刚才那份 PPT” resolve without
-  re-uploading or searching the knowledge base. Only an explicit request to
-  query company knowledge, existing documents, or related knowledge enables
-  `search_knowledge`; the plugin rejects accidental calls deterministically.
+  re-uploading or searching the knowledge base. Hermes selects
+  `search_knowledge` from the user's semantics and same-Session conversation;
+  the plugin rejects missing user context, explicit retrieval negation, and
+  attachment-only continuation calls deterministically.
 - `upload_wechat_knowledge_attachment` uploads one authorized attachment to the
   normal ingestion workflow. Personal knowledge needs no category. Shared
   company knowledge requires a category and follows supervisor review. JPEG
@@ -249,6 +240,28 @@ gateway:
   the exact current attachment. The server records that analysis as untrusted
   client-generated evidence, validates the actual image independently, and also
   runs local OCR when available.
+- `download_wechat_knowledge_file` takes only a `document_id` returned by search
+  or listing. It calls `prepare_knowledge_download` using the active employee's
+  PAT on every request, fetches the authorized original bytes without forwarding
+  credentials, and returns a Gateway attachment directive. The model must include
+  `delivery_directive` verbatim in its final reply, outside code fences. The
+  `[[as_document]]` marker requests original-file delivery; this is not a text
+  export or a summary. Status `ready_for_delivery` means the download succeeded,
+  not that Weixin has acknowledged delivery.
+  Signed URLs are never returned by this local tool or written to its cache.
+  GET requests allow only HTTPS on the MCP origin or exact hostnames in
+  `PROFILE_RAG_MCP_DOWNLOAD_HOSTS` (comma-separated, no wildcard); redirects and
+  ambient proxies are disabled. Configure the actual public OSS bucket hostname
+  in the deployment environment when direct downloads are enabled.
+  Downloads use private `knowledge-downloads/<session-hash>/request-*/` folders
+  inside each Profile, preserve safe original file names, and record a SHA-256
+  digest in the result. A request accepts at most the existing attachment size
+  limit (25 MiB by default) and streams for at most 60 seconds. Separate outbound
+  cache quotas use the existing session count/byte, Profile byte, and global byte
+  limits; quotas reserve one maximum-sized file before each transfer. Files expire
+  after one hour and are removed by the existing maintenance worker (normally
+  every ten minutes) or before the next download. Failed transfers remove partial
+  files. Outbound files never become authorized incoming attachment grants.
 - `prepare_task_submission_file_download` receives only a `submission_no` and
   `document_id` already visible in task feedback, then returns a short-lived URL
   for the exact document version pinned by that submission. The model must not
@@ -258,14 +271,25 @@ The OSS PUT is streamed from the cached file. The Profile PAT is sent only to
 the RAG MCP origin and is never forwarded to OSS. A generic Hermes file tool is
 therefore not required for either workflow.
 
-Temporary analysis uses the existing staged-upload extraction path. The RAG
-service deletes the temporary OSS object after extraction in a `finally`
-cleanup path. An analyzed attachment is not indexed or persisted as knowledge
-unless the employee separately invokes the knowledge-ingestion workflow.
+Temporary analysis (plugin 0.10.0) reads authorized plain-text attachments locally.
+PDF/DOCX/PPTX/XLSX are streamed to the local MinerU adapter's authenticated
+`POST /tasks/from-file` endpoint, sharing its existing backend pool with ingestion.
+Parsing stays `auto`; no OSS object or ECS extraction job is created, and failures
+never fall back to cloud staging. Legacy DOC/PPT/XLS must first be converted.
+Extracted text remains untrusted data; files, macros and source code are never executed.
 
-Legacy DOC/PPT extraction runs only the fixed `antiword` and `catppt` commands
-without a shell. Images are bounded by file-size and pixel-count limits. The
-service never executes uploaded source code, Office macros, or embedded objects.
+Configure Hermes with `PROFILE_RAG_MCP_LOCAL_MINERU_URL=http://mineru-adapter:8000`,
+`PROFILE_RAG_MCP_LOCAL_MINERU_TOKEN_FILE=/run/secrets/adapter.token` and optionally
+`PROFILE_RAG_MCP_LOCAL_ANALYSIS_TIMEOUT_SECONDS=600`. Mount the adapter token into
+Hermes separately from Profile PATs. The local parser receives only its adapter token.
+Model inference still uses the configured model provider and receives extracted text.
+
+Incoming attachments retain their existing Profile/Session authorization and cache
+expiry (pending/failed 30 minutes idle, analyzed 60 minutes idle, absolute 4 hours).
+Active parsing holds a cleanup lease. Adapter upload spools are removed after native
+submission, including failures. Native MinerU task results have their own retention
+(the current Mac service uses 2 hours). Knowledge ingestion remains an explicit,
+separate OSS/RAG operation.
 
 ## Schema updates
 

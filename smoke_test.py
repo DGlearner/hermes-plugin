@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-LOCAL_TOOL_COUNT = 2
+LOCAL_TOOL_COUNT = 3
 
 
 def _expected_tool_count() -> int:

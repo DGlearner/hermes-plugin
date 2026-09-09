@@ -437,7 +437,7 @@
   },
   {
     "name": "upload_video_knowledge",
-    "description": "Upload a MP4, MOV, WEBM, and MKV video together with client-generated structured analysis. The server does not parse the video. It validates the supplied summary and ordered time segments, generates Markdown, then queues chunking, embedding, and indexing. Every segment needs start_seconds, end_seconds, title, and content; keywords are optional. Visibility defaults to personal. Company videos require one category: company-information, xiaopai-design, or patent-document. Use get_knowledge_upload_status with the returned upload_id until processing completes.",
+    "description": "Upload a MP4, MOV, WEBM, and MKV video with a title and summary in analysis. Only analysis.title and analysis.summary are required; title may use the file name. duration_seconds and segments are optional. Never invent a duration or timeline. The server stores the whole video and indexes supplied text only; summary-only videos are labeled as such and cannot answer undescribed details or timestamp questions. It generates Markdown, then queues chunking, embedding, and indexing. If provided, every segment needs start_seconds, end_seconds, title, and content; keywords are optional. Visibility defaults to personal. Company videos require one category: company-information, xiaopai-design, or patent-document. Use get_knowledge_upload_status with the returned upload_id until processing completes.",
     "input_schema": {
       "$defs": {
         "KnowledgeCategory": {
@@ -522,26 +522,32 @@
               "type": "string"
             },
             "duration_seconds": {
-              "exclusiveMinimum": 0,
-              "maximum": 86400,
-              "title": "Duration Seconds",
-              "type": "number"
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 86400,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Seconds"
             },
             "segments": {
+              "default": [],
               "items": {
                 "$ref": "#/$defs/VideoAnalysisSegment"
               },
               "maxItems": 2000,
-              "minItems": 1,
               "title": "Segments",
               "type": "array"
             }
           },
           "required": [
             "title",
-            "summary",
-            "duration_seconds",
-            "segments"
+            "summary"
           ],
           "title": "VideoAnalysisInput",
           "type": "object"
@@ -846,26 +852,32 @@
               "type": "string"
             },
             "duration_seconds": {
-              "exclusiveMinimum": 0,
-              "maximum": 86400,
-              "title": "Duration Seconds",
-              "type": "number"
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 86400,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Duration Seconds"
             },
             "segments": {
+              "default": [],
               "items": {
                 "$ref": "#/$defs/VideoAnalysisSegment"
               },
               "maxItems": 2000,
-              "minItems": 1,
               "title": "Segments",
               "type": "array"
             }
           },
           "required": [
             "title",
-            "summary",
-            "duration_seconds",
-            "segments"
+            "summary"
           ],
           "title": "VideoAnalysisInput",
           "type": "object"

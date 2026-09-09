@@ -531,6 +531,14 @@ class InstalledHermesControl:
 
     @staticmethod
     def _validate_employee_profile_config(config: dict[str, Any]) -> None:
+        # Validate the effective configuration without writing shared values into a Profile.
+        config = deepcopy(config)
+        try:
+            from hermes_cli.managed_scope import apply_managed_overlay
+        except ImportError:
+            pass
+        else:
+            config = apply_managed_overlay(config)
         if not config.get("model") or not config.get("providers"):
             raise ProvisioningError(
                 "employee_model_config_missing",
