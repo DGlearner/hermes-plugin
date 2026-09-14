@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 PROFILE_PATTERN = re.compile(r"^employee-[0-9a-f]{32}$")
+WechatQrStatus = Literal["waiting", "scanned", "connecting", "connected", "expired", "failed"]
 
 
 class BindWechatRequest(BaseModel):
@@ -50,6 +52,25 @@ class WechatBindingResponse(BaseModel):
     external_user_id: str
     profile_name: str
     bound_at: datetime
+
+
+class WechatQrRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: UUID
+    username: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=100)
+
+    @property
+    def profile_name(self) -> str:
+        return f"employee-{self.employee_id.hex}"
+
+
+class WechatQrResponse(BaseModel):
+    status: WechatQrStatus
+    session_id: UUID
+    qr_image: str | None = Field(default=None, max_length=200_000)
+    expires_in: int = Field(ge=0, le=480)
 
 
 class ProvisionerHealth(BaseModel):

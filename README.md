@@ -1,11 +1,19 @@
 # Hermes Profile-aware RAG MCP plugin
 
-## Release 0.11.0
+## Release 0.12.0
 
-This release includes the 0.9 original-file Weixin download and knowledge-intent
-continuity changes, the 0.10 local text/MinerU attachment analysis path, and video
-summary uploads. The integrated source and current runtime documentation are in
-`RUNTIME.md`; they supersede the historical workflow descriptions below.
+This release adds employee self-service Weixin QR login to the existing Profile
+binding flow. QR sessions are short-lived and memory-only; channel credentials
+are installed only after Weixin confirmation, only in that employee Profile,
+and are never returned to the browser or written to the Provisioner journal.
+The Provisioner rejects a channel account already assigned to another Profile
+and restarts the multiplex Gateway only after confirmation.
+
+It also includes the 0.9 original-file Weixin download and knowledge-intent
+continuity changes, the 0.10 local text/MinerU attachment analysis path, and the
+0.11 video summary uploads. The integrated source and current runtime
+documentation are in `RUNTIME.md`; they supersede the historical workflow
+descriptions below.
 
 For MP4/MOV/WEBM/MKV uploads, provide `video_summary` and optionally `video_title`
 to `upload_wechat_knowledge_attachment`. The title defaults to the filename.

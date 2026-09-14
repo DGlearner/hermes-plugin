@@ -7,7 +7,17 @@ remains under its own S6 service.
 
 The service:
 
-- validates a pairing code in the default Profile;
+- creates a short-lived, memory-only QR login session for the authenticated
+  employee and returns only a PNG data URL plus public status fields;
+- creates or reuses that employee's Profile before login, but writes no Weixin
+  channel credential until the employee confirms in Weixin;
+- stores the confirmed channel only in that employee Profile and rejects the
+  same channel account if it is already configured in the default Profile or
+  another employee Profile;
+- restarts the multiplex Gateway only after confirmation so the new Profile
+  channel becomes active; a QR page view by itself never restarts the Gateway;
+- validates a pairing code in the employee Profile created by QR login, with
+  the default Profile retained as the shared-channel compatibility path;
 - creates `employee-<employee_uuid_hex>` from `employee-template`;
 - stores the employee RAG PAT only in that Profile's `.env`;
 - grants the WeChat user in both the routed employee Profile and the default

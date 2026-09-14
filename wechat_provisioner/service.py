@@ -6,17 +6,10 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from .contracts import BindWechatRequest, UnbindWechatRequest, WechatBindingResponse
+from .errors import ProvisioningError
 from .state import BindingStateStore, StoredBinding, utc_now
 
 logger = logging.getLogger(__name__)
-
-
-class ProvisioningError(RuntimeError):
-    def __init__(self, code: str, message: str, *, status_code: int = 400, retryable: bool = False) -> None:
-        super().__init__(message)
-        self.code = code
-        self.status_code = status_code
-        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -28,7 +21,7 @@ class WechatIdentity:
 class HermesControl(Protocol):
     def check_ready(self) -> None: ...
 
-    def approve_default_pairing(self, pairing_code: str) -> WechatIdentity: ...
+    def approve_pairing(self, profile_name: str, pairing_code: str) -> WechatIdentity: ...
 
     def ensure_employee_profile(self, request: BindWechatRequest) -> bool: ...
 
@@ -75,7 +68,10 @@ class WechatProvisioningService:
         if existing and existing.status in {"provisioning", "active", "revoking"}:
             identity = WechatIdentity(existing.external_user_id, existing.user_name)
         else:
-            identity = self._control.approve_default_pairing(request.pairing_code.get_secret_value())
+            identity = self._control.approve_pairing(
+                request.profile_name,
+                request.pairing_code.get_secret_value(),
+            )
             conflict = self._state.find_active_user(identity.user_id)
             if conflict and conflict.binding_id != request.binding_id:
                 self._control.revoke_default_user(identity.user_id)

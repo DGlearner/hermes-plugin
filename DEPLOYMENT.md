@@ -77,7 +77,7 @@ docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}
 docker exec hermes-weixin grep -m1 '^version:' /opt/hermes/plugins/profile_rag_mcp/plugin.yaml
 ```
 
-Expected plugin version for this release: `0.7.0`.
+Expected plugin version for this release: `0.12.0`.
 
 ## Hermes base-image releases
 

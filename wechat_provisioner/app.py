@@ -12,8 +12,11 @@ from .contracts import (
     ProvisionerHealth,
     UnbindWechatRequest,
     WechatBindingResponse,
+    WechatQrRequest,
+    WechatQrResponse,
 )
 from .hermes_control import InstalledHermesControl
+from .qr_login import WechatQrLoginService
 from .service import ProvisioningError, WechatProvisioningService
 from .settings import ProvisionerSettings
 from .state import BindingStateStore
@@ -22,12 +25,15 @@ from .state import BindingStateStore
 def create_app(
     settings: ProvisionerSettings | None = None,
     service: WechatProvisioningService | None = None,
+    qr_service: WechatQrLoginService | None = None,
 ) -> FastAPI:
     resolved = settings or ProvisionerSettings.from_env()
+    control = InstalledHermesControl(resolved)
     provisioning = service or WechatProvisioningService(
-        InstalledHermesControl(resolved),
+        control,
         BindingStateStore(resolved.hermes_home / "provisioner" / "wechat_bindings.json"),
     )
+    qr_login = qr_service or WechatQrLoginService(control)
     app = FastAPI(title="Hermes WeChat Provisioner", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -64,6 +70,22 @@ def create_app(
     async def readyz() -> ProvisionerHealth:
         await provisioning.ready()
         return ProvisionerHealth(status="ready")
+
+    @app.post(
+        "/v1/wechat-qr",
+        response_model=WechatQrResponse,
+        dependencies=[Depends(require_token)],
+    )
+    async def start_wechat_qr(body: WechatQrRequest) -> WechatQrResponse:
+        return await qr_login.start(body)
+
+    @app.post(
+        "/v1/wechat-qr/{session_id}",
+        response_model=WechatQrResponse,
+        dependencies=[Depends(require_token)],
+    )
+    async def poll_wechat_qr(session_id: UUID, body: WechatQrRequest) -> WechatQrResponse:
+        return await qr_login.poll(session_id, body)
 
     @app.post(
         "/v1/wechat-bindings",

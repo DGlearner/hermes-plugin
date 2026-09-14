@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import secrets
 import subprocess
 import tempfile
 import time
@@ -13,9 +15,13 @@ from uuid import UUID
 
 import yaml
 
-from .contracts import BindWechatRequest
-from .service import ProvisioningError, WechatIdentity
+from .contracts import BindWechatRequest, WechatQrRequest
+from .errors import ProvisioningError
+from .qr_login import WeixinQrCredentials
+from .service import WechatIdentity
 from .settings import ProvisionerSettings
+
+logger = logging.getLogger(__name__)
 
 PAT_ENV = "MCP_COMPANY_MCP_API_KEY"
 SHARED_MODEL_API_KEY_ENV = "HERMES_SHARED_MODEL_API_KEY"
@@ -23,8 +29,16 @@ FORBIDDEN_TEMPLATE_SECRETS = {
     PAT_ENV,
     "WEIXIN_ACCOUNT_ID",
     "WEIXIN_ALLOWED_USERS",
+    "WEIXIN_BASE_URL",
+    "WEIXIN_CDN_BASE_URL",
     "WEIXIN_TOKEN",
 }
+PROFILE_WEIXIN_ENV_KEYS = (
+    "WEIXIN_ACCOUNT_ID",
+    "WEIXIN_TOKEN",
+    "WEIXIN_BASE_URL",
+    "WEIXIN_CDN_BASE_URL",
+)
 MANAGED_ROUTE_PREFIX = "rag-mcp-wechat-"
 EMPLOYEE_WEIXIN_TOOLSETS = (
     "web",
@@ -155,11 +169,22 @@ class InstalledHermesControl:
             synchronized.append(profile_name)
         return tuple(synchronized)
 
-    def approve_default_pairing(self, pairing_code: str) -> WechatIdentity:
+    def approve_pairing(self, profile_name: str, pairing_code: str) -> WechatIdentity:
         with self._profile_scope(self._home):
             from gateway.pairing import PairingStore
 
-            store = PairingStore(profile="default")
+            stores = []
+            if self._profile_home(profile_name).is_dir():
+                stores.append(PairingStore(profile=profile_name))
+            if profile_name != "default":
+                stores.append(PairingStore(profile="default"))
+
+            store = next(
+                (candidate for candidate in stores if self._pairing_store_has_code(candidate, pairing_code)),
+                None,
+            )
+            if store is None:
+                store = stores[0] if self._profile_has_weixin_credentials(profile_name) else stores[-1]
             result = store.approve_code("weixin", pairing_code)
             if not result:
                 locked = bool(store._is_locked_out("weixin"))
@@ -171,7 +196,7 @@ class InstalledHermesControl:
                 )
         return WechatIdentity(str(result["user_id"]), str(result.get("user_name") or ""))
 
-    def ensure_employee_profile(self, request: BindWechatRequest) -> bool:
+    def ensure_employee_profile(self, request: BindWechatRequest | WechatQrRequest) -> bool:
         profile_home = self._profile_home(request.profile_name)
         marker = profile_home / ".rag-mcp-employee.json"
         created = False
@@ -207,6 +232,116 @@ class InstalledHermesControl:
                 },
             )
         return created
+
+    def install_profile_weixin_credentials(
+        self,
+        *,
+        profile_name: str,
+        credentials: WeixinQrCredentials,
+    ) -> None:
+        profile_home = self._profile_home(profile_name)
+        if not profile_home.is_dir():
+            raise ProvisioningError("profile_missing", "Hermes employee profile does not exist.", status_code=503)
+        values = {
+            "WEIXIN_ACCOUNT_ID": credentials.account_id,
+            "WEIXIN_TOKEN": credentials.token,
+            "WEIXIN_BASE_URL": credentials.base_url,
+            "WEIXIN_CDN_BASE_URL": credentials.cdn_base_url,
+        }
+        if any(not value or "\n" in value or "\r" in value for value in values.values()):
+            raise ProvisioningError(
+                "invalid_wechat_credentials",
+                "WeChat returned invalid channel credentials.",
+                status_code=503,
+            )
+        self._ensure_weixin_account_available(profile_name, credentials.account_id)
+        previous = self._profile_secret_values(profile_home, PROFILE_WEIXIN_ENV_KEYS)
+
+        try:
+            self._write_profile_env_values(profile_home, values)
+            self.restart_gateway(profile_name)
+        except Exception:
+            try:
+                self._write_profile_env_values(profile_home, previous)
+                self.restart_gateway(profile_name)
+            except Exception as rollback_error:  # noqa: BLE001 - preserve the original activation failure
+                logger.error(
+                    "Could not restore the previous Profile WeChat channel after activation failed: %s",
+                    type(rollback_error).__name__,
+                )
+            raise
+
+    def _ensure_weixin_account_available(self, profile_name: str, account_id: str) -> None:
+        profiles = [("default", self._home)]
+        profiles.extend(
+            (path.name, path)
+            for path in sorted((self._home / "profiles").glob("*"))
+            if path.is_dir()
+        )
+        for candidate_name, candidate_home in profiles:
+            if candidate_name == profile_name:
+                continue
+            existing = self._profile_secret_values(candidate_home, ("WEIXIN_ACCOUNT_ID",)).get(
+                "WEIXIN_ACCOUNT_ID"
+            )
+            if existing and secrets.compare_digest(existing, account_id):
+                raise ProvisioningError(
+                    "wechat_account_channel_conflict",
+                    "This WeChat channel is already connected to another Hermes profile.",
+                    status_code=409,
+                )
+
+    def _profile_has_weixin_credentials(self, profile_name: str) -> bool:
+        profile_home = self._profile_home(profile_name)
+        if not profile_home.is_dir():
+            return False
+        values = self._profile_secret_values(profile_home, ("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN"))
+        return bool(values.get("WEIXIN_ACCOUNT_ID") and values.get("WEIXIN_TOKEN"))
+
+    @staticmethod
+    def _pairing_store_has_code(store, pairing_code: str) -> bool:
+        code = pairing_code.upper().strip()
+        with store._lock:
+            store._cleanup_expired("weixin")
+            pending = store._load_json(store._pending_path("weixin"))
+            for entry in pending.values():
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    salt = bytes.fromhex(str(entry["salt"]))
+                    expected = str(entry["hash"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if secrets.compare_digest(store._hash_code(code, salt), expected):
+                    return True
+        return False
+
+    def _profile_secret_values(
+        self,
+        profile_home: Path,
+        keys: tuple[str, ...],
+    ) -> dict[str, str | None]:
+        with self._profile_scope(profile_home):
+            from agent.secret_scope import build_profile_secret_scope
+
+            scope = build_profile_secret_scope(profile_home)
+        return {
+            key: str(scope[key]).strip() if scope.get(key) is not None and str(scope[key]).strip() else None
+            for key in keys
+        }
+
+    def _write_profile_env_values(
+        self,
+        profile_home: Path,
+        values: dict[str, str | None],
+    ) -> None:
+        with self._profile_scope(profile_home):
+            from hermes_cli.config import remove_env_value, save_env_value
+
+            for key, value in values.items():
+                writer = save_env_value if value is not None else remove_env_value
+                args = (key, value) if value is not None else (key,)
+                self._call_env_writer(key, writer, *args)
 
     def set_profile_pat(self, profile_name: str, personal_token: str) -> None:
         with self._profile_scope(self._profile_home(profile_name)):
@@ -374,8 +509,15 @@ class InstalledHermesControl:
 
     @contextmanager
     def _profile_scope(self, profile_home: Path):
-        from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from agent.secret_scope import (
+            build_profile_secret_scope,
+            reset_secret_scope,
+            set_secret_scope,
+        )
+        from hermes_constants import (
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
 
         home_token = set_hermes_home_override(profile_home)
         secret_token = set_secret_scope(build_profile_secret_scope(profile_home))

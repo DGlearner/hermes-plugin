@@ -1,5 +1,5 @@
 name: profile-rag-mcp
-version: 0.11.0
+version: 0.12.0
 description: >
   Profile-aware proxy for the XXP RAG MCP service. Each tool call
   reads the active Hermes profile's employee PAT and forwards one JSON-RPC
