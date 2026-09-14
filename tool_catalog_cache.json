@@ -1347,5 +1347,1658 @@
       "title": "update_daily_reportArguments",
       "type": "object"
     }
+  },
+  {
+    "name": "create_requirement_draft",
+    "description": "Create an unpublished requirement draft from optional untrusted source_text or an authorized source_document_id. Include only the parent title, overview, priority, due time and optional source, plus every discussed child task's title, overview, expected submission, optional dependencies and dependency files, due time, and assignee username selected with list_employee_directory. Any authenticated active employee may create a draft and may select any active company employee, including managers or leaders, regardless of department. This tool only saves a draft and never assigns work or publishes tasks. Child-task priority is inherited from the parent and must not be supplied separately. Use a new idempotency_key for a new intent and reuse it only when retrying the same request.",
+    "input_schema": {
+      "$defs": {
+        "RequirementDraftInput": {
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "description": {
+              "maxLength": 30000,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            },
+            "source_text": {
+              "anyOf": [
+                {
+                  "maxLength": 50000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Text"
+            },
+            "source_document_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Document Id"
+            },
+            "priority": {
+              "$ref": "#/$defs/TaskPriority",
+              "default": "normal"
+            },
+            "due_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due At"
+            },
+            "task_drafts": {
+              "items": {
+                "$ref": "#/$defs/TaskDraftInput"
+              },
+              "minItems": 1,
+              "title": "Task Drafts",
+              "type": "array"
+            }
+          },
+          "required": [
+            "title",
+            "description",
+            "task_drafts"
+          ],
+          "title": "RequirementDraftInput",
+          "type": "object"
+        },
+        "TaskDependencyFile": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/TaskDependencyFileSource"
+            },
+            "description": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            },
+            "source_task_ref": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Task Ref"
+            }
+          },
+          "required": [
+            "source",
+            "description"
+          ],
+          "title": "TaskDependencyFile",
+          "type": "object"
+        },
+        "TaskDependencyFileSource": {
+          "enum": [
+            "requirement_source",
+            "task_submission"
+          ],
+          "title": "TaskDependencyFileSource",
+          "type": "string"
+        },
+        "TaskDraftInput": {
+          "additionalProperties": false,
+          "properties": {
+            "client_ref": {
+              "maxLength": 50,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "summary": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "expected_submission": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Expected Submission",
+              "type": "string"
+            },
+            "assignee_username": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Assignee Username"
+            },
+            "depends_on": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Depends On",
+              "type": "array"
+            },
+            "dependency_files": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/TaskDependencyFile"
+              },
+              "maxItems": 100,
+              "title": "Dependency Files",
+              "type": "array"
+            },
+            "due_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due At"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title",
+            "summary",
+            "expected_submission"
+          ],
+          "title": "TaskDraftInput",
+          "type": "object"
+        },
+        "TaskPriority": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "title": "TaskPriority",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/RequirementDraftInput"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "draft",
+        "idempotency_key"
+      ],
+      "title": "create_requirement_draftArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_requirement_draft",
+    "description": "Return one visible requirement by stable requirement_no, including its full parent overview, every child task, resolved assignee directory data, current version, validation issues, and allowed next actions.",
+    "input_schema": {
+      "properties": {
+        "requirement_no": {
+          "title": "Requirement No",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_no"
+      ],
+      "title": "get_requirement_draftArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_requirement_drafts",
+    "description": "List requirement drafts visible to the authenticated employee. Optionally filter by workflow status. Unpublished drafts are never exposed merely because an employee is named as a proposed assignee.",
+    "input_schema": {
+      "$defs": {
+        "RequirementDraftStatus": {
+          "enum": [
+            "draft",
+            "ready",
+            "published",
+            "discarded"
+          ],
+          "title": "RequirementDraftStatus",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequirementDraftStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "list_requirement_draftsArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_requirement_draft",
+    "description": "Apply explicit changes to an unpublished requirement draft. Supply the version most recently shown to the user and a unique idempotency_key. Any edit returns a ready draft to draft status and invalidates all earlier confirmation credentials, so the complete revised draft must be reviewed again.",
+    "input_schema": {
+      "$defs": {
+        "RequirementDraftPatch": {
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 30000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "source_text": {
+              "anyOf": [
+                {
+                  "maxLength": 50000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Text"
+            },
+            "source_document_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Document Id"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TaskPriority"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "due_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due At"
+            },
+            "task_drafts": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/TaskDraftInput"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Task Drafts"
+            }
+          },
+          "title": "RequirementDraftPatch",
+          "type": "object"
+        },
+        "TaskDependencyFile": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/TaskDependencyFileSource"
+            },
+            "description": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            },
+            "source_task_ref": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Task Ref"
+            }
+          },
+          "required": [
+            "source",
+            "description"
+          ],
+          "title": "TaskDependencyFile",
+          "type": "object"
+        },
+        "TaskDependencyFileSource": {
+          "enum": [
+            "requirement_source",
+            "task_submission"
+          ],
+          "title": "TaskDependencyFileSource",
+          "type": "string"
+        },
+        "TaskDraftInput": {
+          "additionalProperties": false,
+          "properties": {
+            "client_ref": {
+              "maxLength": 50,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "summary": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "expected_submission": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Expected Submission",
+              "type": "string"
+            },
+            "assignee_username": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Assignee Username"
+            },
+            "depends_on": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Depends On",
+              "type": "array"
+            },
+            "dependency_files": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/TaskDependencyFile"
+              },
+              "maxItems": 100,
+              "title": "Dependency Files",
+              "type": "array"
+            },
+            "due_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due At"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title",
+            "summary",
+            "expected_submission"
+          ],
+          "title": "TaskDraftInput",
+          "type": "object"
+        },
+        "TaskPriority": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "title": "TaskPriority",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "requirement_no": {
+          "title": "Requirement No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "changes": {
+          "$ref": "#/$defs/RequirementDraftPatch"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_no",
+        "expected_version",
+        "changes",
+        "idempotency_key"
+      ],
+      "title": "update_requirement_draftArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "validate_requirement_draft",
+    "description": "Validate and freeze the current draft version after presenting the complete draft to the user for review. The server requires parent and child due times, then rechecks source access, active assignees, task and dependency-file references, dependencies, and dates. A valid result returns a short-lived confirmation_id and content_digest for this exact version; it still does not publish work.",
+    "input_schema": {
+      "properties": {
+        "requirement_no": {
+          "title": "Requirement No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_no",
+        "expected_version",
+        "idempotency_key"
+      ],
+      "title": "validate_requirement_draftArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "discard_requirement_draft",
+    "description": "Soft-discard an unpublished requirement draft after an explicit user request. This is a terminal workflow state, revokes outstanding confirmations, and does not create or cancel executable tasks.",
+    "input_schema": {
+      "properties": {
+        "requirement_no": {
+          "title": "Requirement No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_no",
+        "expected_version",
+        "idempotency_key"
+      ],
+      "title": "discard_requirement_draftArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "publish_requirement",
+    "description": "Publish the exact validated requirement version and create executable child tasks. Call this tool only after the user has seen the complete validated draft and explicitly confirms publication in the current conversation. Never infer confirmation from earlier discussion, silence, or a request to draft or validate. Pass the unmodified confirmation_id, version, and content_digest returned by validation; the server rechecks the employee, credential, assignee status, version, and digest transactionally.",
+    "input_schema": {
+      "properties": {
+        "requirement_no": {
+          "title": "Requirement No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "confirmation_id": {
+          "format": "uuid",
+          "title": "Confirmation Id",
+          "type": "string"
+        },
+        "content_digest": {
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_no",
+        "expected_version",
+        "confirmation_id",
+        "content_digest",
+        "idempotency_key"
+      ],
+      "title": "publish_requirementArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_task_dependency_files",
+    "description": "List pinned parent requirement source and accepted predecessor original files explicitly declared as dependencies. Only the current task publisher or assignee can access this handoff. No arbitrary upstream documents are shared. Download each listed file with an authenticated GET /api/tasks/{task_no}/dependency-files/{file_id}. Empty results mean no accepted, declared source files are available; never invent files or treat this as completion.",
+    "input_schema": {
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no"
+      ],
+      "title": "list_task_dependency_filesArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_unused_task_files",
+    "description": "List your unreferenced task files older than seven days. This is only a cleanup preview; draft and published feedback attachments are excluded. Does not delete anything.",
+    "input_schema": {
+      "properties": {},
+      "title": "list_unused_task_filesArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "delete_unused_task_file",
+    "description": "Permanently delete one file only after the user explicitly confirms its cleanup preview. Pass the exact file_id and sha256 from list_unused_task_files. Files referenced by any feedback or younger than seven days cannot be deleted. Do not infer approval from listing or failed uploads.",
+    "input_schema": {
+      "properties": {
+        "file_id": {
+          "format": "uuid",
+          "title": "File Id",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id",
+        "sha256"
+      ],
+      "title": "delete_unused_task_fileArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "upload_task_file",
+    "description": "Upload an original attachment for a task you have started. No text extraction, OCR or knowledge indexing is performed. Pass returned file_id to prepare_task_submission.file_ids. Uploading does not publish feedback or trigger evaluation. Multiple files may be uploaded separately (20 per feedback). Only these original file types are accepted: PDF, DOCX, PPTX, XLSX, TXT, MD, CSV, JSON, YAML/YML, PY, PNG, JPG/JPEG. Archives, XML, video, legacy DOC/PPT/XLS and all unlisted types are rejected; no unpacking is performed. This tool never reads file:// paths. For employee-local files execute an authenticated multipart POST to /api/tasks/{task_no}/files locally with file and idempotency_key, not on the remote MCP server. Do not ask employees to provide credentials in conversation. Reuse the key only for the same file intent.",
+    "input_schema": {
+      "$defs": {
+        "OpenAIFile": {
+          "additionalProperties": false,
+          "properties": {
+            "download_url": {
+              "title": "Download Url",
+              "type": "string"
+            },
+            "file_id": {
+              "title": "File Id",
+              "type": "string"
+            },
+            "mime_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mime Type"
+            },
+            "file_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "File Name"
+            }
+          },
+          "required": [
+            "download_url",
+            "file_id"
+          ],
+          "title": "OpenAIFile",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "file": {
+          "$ref": "#/$defs/OpenAIFile"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no",
+        "file",
+        "idempotency_key"
+      ],
+      "title": "upload_task_fileArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_my_tasks",
+    "description": "List formal tasks assigned to the authenticated employee. Use this after work is published, or when the employee asks what they need to do. Results include status, priority, due date, assignees, incomplete prerequisite task numbers, and pagination totals.",
+    "input_schema": {
+      "$defs": {
+        "TaskStatus": {
+          "enum": [
+            "open",
+            "in_progress",
+            "pending_review",
+            "completed",
+            "cancelled"
+          ],
+          "title": "TaskStatus",
+          "type": "string"
+        },
+        "TaskType": {
+          "enum": [
+            "work_delivery",
+            "knowledge_review",
+            "skill_review",
+            "publish_confirmation"
+          ],
+          "title": "TaskType",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "task_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "list_my_tasksArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_created_tasks",
+    "description": "List formal tasks created by the authenticated employee when a confirmed requirement was published. Use this to review distribution results and task progress; it does not expose drafts or tasks created by other employees.",
+    "input_schema": {
+      "$defs": {
+        "TaskStatus": {
+          "enum": [
+            "open",
+            "in_progress",
+            "pending_review",
+            "completed",
+            "cancelled"
+          ],
+          "title": "TaskStatus",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "list_created_tasksArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_visible_tasks",
+    "description": "Search all formally published company tasks. Every authenticated active employee may use this read-only company view. employee_name performs a case-insensitive partial match against an assigned employee's username or display name. department_code limits results to tasks assigned to employees or department roles in that department. When both are supplied, the same assignment must match both; when only the department is supplied, all matching department tasks are returned; when both are omitted, all company tasks are returned. Visibility does not grant permission to edit, stop, submit, download feedback files, or review another publisher's task.",
+    "input_schema": {
+      "$defs": {
+        "TaskStatus": {
+          "enum": [
+            "open",
+            "in_progress",
+            "pending_review",
+            "completed",
+            "cancelled"
+          ],
+          "title": "TaskStatus",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "employee_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Employee Name"
+        },
+        "department_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "engineering",
+                "project",
+                "finance"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Department Code"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "list_visible_tasksArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_task",
+    "description": "Return one formally published company task by server-generated task_no. Every authenticated active employee may read task details. Includes the complete instructions, acceptance criteria, expected deliverables, assignees, and incomplete prerequisite task numbers; write actions remain restricted to the publisher or assignee as appropriate.",
+    "input_schema": {
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no"
+      ],
+      "title": "get_taskArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_task_submission",
+    "description": "Return one task feedback submission after task-scope ACL checks. Published submissions include pinned document metadata, the server-side AI rubric score when available, and the publisher's final human review. Draft feedback remains visible only to its submitter.",
+    "input_schema": {
+      "properties": {
+        "submission_no": {
+          "title": "Submission No",
+          "type": "string"
+        }
+      },
+      "required": [
+        "submission_no"
+      ],
+      "title": "get_task_submissionArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_task_submissions",
+    "description": "List immutable published feedback attempts for one authorized task, newest first. It excludes the submitter's current unconfirmed draft and exposes advisory AI scores plus final publisher decisions.",
+    "input_schema": {
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no"
+      ],
+      "title": "list_task_submissionsArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "prepare_task_submission_file_download",
+    "description": "Create a short-lived download URL for one document pinned to an authorized task feedback submission. Always provide both submission_no and document_id from get_task_submission or list_task_submissions. The server rechecks task scope and downloads the exact document version captured by that submission, even if the knowledge document was later replaced. OSS deployments may return a private-bucket signed GET URL; other providers return a one-time service URL. Do not store or share the returned URL.",
+    "input_schema": {
+      "properties": {
+        "submission_no": {
+          "title": "Submission No",
+          "type": "string"
+        },
+        "document_id": {
+          "format": "uuid",
+          "title": "Document Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "submission_no",
+        "document_id"
+      ],
+      "title": "prepare_task_submission_file_downloadArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "start_task",
+    "description": "Start an open task assigned to the authenticated employee after all prerequisite tasks are completed. This records the employee, start time, and exact accepted task version, and freezes substantive changes. Use the current version returned by get_task or list_my_tasks.",
+    "input_schema": {
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no",
+        "expected_version",
+        "idempotency_key"
+      ],
+      "title": "start_taskArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "prepare_task_submission",
+    "description": "Save or replace the authenticated assignee's one current feedback draft for an in-progress task. Include text, file_ids from upload_task_file, existing document_ids, or both. Source files do not need local parsing or knowledge indexing; this tool never reads file:// paths and never accepts a client URL. It pins the original file versions and task requirements, but does not submit work or change task status. Show the complete returned draft to the employee before publication. For a returned files entry, pass its file_id as document_id to prepare_task_submission_file_download.",
+    "input_schema": {
+      "$defs": {
+        "TaskSubmissionDraftInput": {
+          "additionalProperties": false,
+          "properties": {
+            "feedback_text": {
+              "anyOf": [
+                {
+                  "maxLength": 30000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Feedback Text"
+            },
+            "document_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 20,
+              "title": "Document Ids",
+              "type": "array"
+            },
+            "file_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 20,
+              "title": "File Ids",
+              "type": "array"
+            }
+          },
+          "title": "TaskSubmissionDraftInput",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "expected_task_version": {
+          "title": "Expected Task Version",
+          "type": "integer"
+        },
+        "submission": {
+          "$ref": "#/$defs/TaskSubmissionDraftInput"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "expected_submission_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Submission Version"
+        }
+      },
+      "required": [
+        "task_no",
+        "expected_task_version",
+        "submission",
+        "idempotency_key"
+      ],
+      "title": "prepare_task_submissionArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "publish_task_submission",
+    "description": "Publish the exact current feedback draft only after the assignee explicitly confirms it. Submit the returned submission version, confirmation_id, and content_digest unchanged. The server rechecks the assignee, credential, task version, pinned documents, and confirmation, moves the task to pending_review, and runs an advisory server-side AI evaluation. Never infer confirmation from discussion or silence.",
+    "input_schema": {
+      "properties": {
+        "submission_no": {
+          "title": "Submission No",
+          "type": "string"
+        },
+        "expected_submission_version": {
+          "title": "Expected Submission Version",
+          "type": "integer"
+        },
+        "confirmation_id": {
+          "format": "uuid",
+          "title": "Confirmation Id",
+          "type": "string"
+        },
+        "content_digest": {
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "submission_no",
+        "expected_submission_version",
+        "confirmation_id",
+        "content_digest",
+        "idempotency_key"
+      ],
+      "title": "publish_task_submissionArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "retry_task_evaluation",
+    "description": "Retry a failed server-side AI evaluation for a pending task submission. Only the submitter or original publisher may retry. This never changes the submitted evidence or makes the final review decision.",
+    "input_schema": {
+      "properties": {
+        "submission_no": {
+          "title": "Submission No",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "submission_no",
+        "idempotency_key"
+      ],
+      "title": "retry_task_evaluationArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "review_task_submission",
+    "description": "Record the original publisher's final human decision on the current pending submission. Accept completes the task; request_revision returns it to in_progress while preserving the feedback and AI score. The AI score is advisory and never completes a task automatically. Department managers and company leaders may view within their scope but cannot replace the original publisher's decision.",
+    "input_schema": {
+      "$defs": {
+        "TaskReviewDecision": {
+          "enum": [
+            "accept",
+            "request_revision"
+          ],
+          "title": "TaskReviewDecision",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "submission_no": {
+          "title": "Submission No",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/TaskReviewDecision"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "submission_no",
+        "decision",
+        "reason",
+        "idempotency_key"
+      ],
+      "title": "review_task_submissionArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_task_amendment",
+    "description": "Return one substantive task amendment owned by the authenticated original publisher. Draft amendments show the single current proposal, downstream task numbers, and short-lived confirmation fields. The server does not expose intermediate overwritten draft versions.",
+    "input_schema": {
+      "properties": {
+        "amendment_no": {
+          "title": "Amendment No",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amendment_no"
+      ],
+      "title": "get_task_amendmentArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_task",
+    "description": "Edit an active formal task that was published by the authenticated employee. Supports title, summary, priority, and due date only. These lightweight changes publish immediately and store one immutable task revision. Reassignment, instructions, acceptance criteria, and expected deliverables are substantive changes and must use prepare_task_amendment followed by explicit publish_task_amendment confirmation. Pass the current version from get_task or list_created_tasks as expected_version.",
+    "input_schema": {
+      "$defs": {
+        "TaskPriority": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "title": "TaskPriority",
+          "type": "string"
+        },
+        "TaskUpdatePatch": {
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TaskPriority"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "due_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due At"
+            }
+          },
+          "title": "TaskUpdatePatch",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "changes": {
+          "$ref": "#/$defs/TaskUpdatePatch"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no",
+        "expected_version",
+        "changes",
+        "idempotency_key"
+      ],
+      "title": "update_taskArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "prepare_task_amendment",
+    "description": "Save, or explicitly replace, the one current amendment draft for an unstarted task published by the authenticated employee. Prefer expected_submission for delivery and acceptance requirements; it updates the published task and evaluation rubric together after confirmation. Use this for reassignment, instructions, acceptance criteria, or expected deliverables. The call never changes the published task. Show the complete returned draft and downstream impact to the user before publication. To revise an existing draft, pass its current version as expected_amendment_version; overwritten intermediate drafts are not retained or displayed.",
+    "input_schema": {
+      "$defs": {
+        "AcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "criterion_ref": {
+              "maxLength": 50,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "title": "Criterion Ref",
+              "type": "string"
+            },
+            "description": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            },
+            "required": {
+              "default": true,
+              "title": "Required",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "criterion_ref",
+            "description"
+          ],
+          "title": "AcceptanceCriterion",
+          "type": "object"
+        },
+        "ExpectedDeliverable": {
+          "additionalProperties": false,
+          "properties": {
+            "deliverable_ref": {
+              "maxLength": 50,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "title": "Deliverable Ref",
+              "type": "string"
+            },
+            "description": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Description",
+              "type": "string"
+            }
+          },
+          "required": [
+            "deliverable_ref",
+            "description"
+          ],
+          "title": "ExpectedDeliverable",
+          "type": "object"
+        },
+        "TaskAmendmentPatch": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_submission": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Submission"
+            },
+            "instructions": {
+              "anyOf": [
+                {
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Instructions"
+            },
+            "acceptance_criteria": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/AcceptanceCriterion"
+                  },
+                  "maxItems": 100,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Acceptance Criteria"
+            },
+            "expected_deliverables": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/ExpectedDeliverable"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Deliverables"
+            },
+            "assignee_username": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Assignee Username"
+            }
+          },
+          "title": "TaskAmendmentPatch",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "expected_task_version": {
+          "title": "Expected Task Version",
+          "type": "integer"
+        },
+        "changes": {
+          "$ref": "#/$defs/TaskAmendmentPatch"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "expected_amendment_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Amendment Version"
+        }
+      },
+      "required": [
+        "task_no",
+        "expected_task_version",
+        "changes",
+        "reason",
+        "idempotency_key"
+      ],
+      "title": "prepare_task_amendmentArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "publish_task_amendment",
+    "description": "Publish the exact current amendment draft only after the user explicitly confirms its full contents and downstream impact. Submit the returned amendment version, confirmation_id, and content_digest unchanged. The server rechecks the original publisher, current credential, task version, task status, confirmation expiry, and proposed assignee, then applies the change and stores one immutable published task revision. Never infer confirmation from discussion, silence, or creation of the amendment draft.",
+    "input_schema": {
+      "properties": {
+        "amendment_no": {
+          "title": "Amendment No",
+          "type": "string"
+        },
+        "expected_amendment_version": {
+          "title": "Expected Amendment Version",
+          "type": "integer"
+        },
+        "confirmation_id": {
+          "format": "uuid",
+          "title": "Confirmation Id",
+          "type": "string"
+        },
+        "content_digest": {
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amendment_no",
+        "expected_amendment_version",
+        "confirmation_id",
+        "content_digest",
+        "idempotency_key"
+      ],
+      "title": "publish_task_amendmentArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "withdraw_task",
+    "description": "Withdraw an unstarted formal task that was published by the authenticated employee. Call this only after the user explicitly asks to withdraw the specific task and provides a reason; never infer withdrawal from editing discussion, silence, or task reassignment. Withdrawal is a soft cancellation: the task and its history remain visible and cannot be edited afterward. Tasks with active downstream dependents cannot be withdrawn individually. A task already in progress must use stop_task instead.",
+    "input_schema": {
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no",
+        "expected_version",
+        "reason",
+        "idempotency_key"
+      ],
+      "title": "withdraw_taskArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "stop_task",
+    "description": "Stop an in-progress formal task published by the authenticated employee after an explicit human decision and reason. This preserves the task, its last published content, assignments, revisions, and stop event; it does not rewrite work already performed. The server refuses an individual stop when active downstream tasks depend on it, because that requires a separately confirmed requirement-level replacement plan.",
+    "input_schema": {
+      "properties": {
+        "task_no": {
+          "title": "Task No",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_no",
+        "expected_version",
+        "reason",
+        "idempotency_key"
+      ],
+      "title": "stop_taskArguments",
+      "type": "object"
+    }
   }
 ]

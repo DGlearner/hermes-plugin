@@ -58,6 +58,7 @@ SESSION_RESET_POLICY = {
     "at_hour": 4,
     "notify": False,
 }
+WEIXIN_GATEWAY_RESTART_NOTIFICATION = False
 ATTACHMENT_CLEANUP_REQUEST_FILE = ".profile-rag-mcp-attachment-cleanup"
 
 
@@ -571,6 +572,14 @@ class InstalledHermesControl:
         target["known_plugin_toolsets"] = known_plugins
 
         target["session_reset"] = dict(SESSION_RESET_POLICY)
+        platforms = self._mapping_copy(target.get("platforms"))
+        api_server = self._mapping_copy(platforms.get("api_server"))
+        api_server["enabled"] = False
+        platforms["api_server"] = api_server
+        weixin = self._mapping_copy(platforms.get("weixin"))
+        weixin["gateway_restart_notification"] = WEIXIN_GATEWAY_RESTART_NOTIFICATION
+        platforms["weixin"] = weixin
+        target["platforms"] = platforms
         approvals = self._mapping_copy(source_config.get("approvals"))
         deny = approvals.get("deny")
         deny_values = [str(value) for value in deny] if isinstance(deny, list) else []
@@ -703,6 +712,23 @@ class InstalledHermesControl:
             raise ProvisioningError(
                 "employee_session_policy_invalid",
                 "Hermes employee Session policy is invalid.",
+                status_code=503,
+            )
+        if ((config.get("platforms") or {}).get("api_server") or {}).get("enabled") is not False:
+            raise ProvisioningError(
+                "employee_api_server_policy_invalid",
+                "Hermes employee API server policy is invalid.",
+                status_code=503,
+            )
+        if (
+            ((config.get("platforms") or {}).get("weixin") or {}).get(
+                "gateway_restart_notification"
+            )
+            is not WEIXIN_GATEWAY_RESTART_NOTIFICATION
+        ):
+            raise ProvisioningError(
+                "employee_weixin_restart_notification_policy_invalid",
+                "Hermes employee Weixin restart notification policy is invalid.",
                 status_code=503,
             )
         if "*" not in ((config.get("approvals") or {}).get("deny") or []):

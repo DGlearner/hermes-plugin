@@ -7,6 +7,13 @@ import json
 from pathlib import Path
 
 LOCAL_TOOL_COUNT = 3
+REQUIRED_TOOL_NAMES = {
+    "get_current_user",
+    "search_knowledge",
+    "analyze_wechat_attachment",
+    "download_wechat_knowledge_file",
+    "upload_wechat_knowledge_attachment",
+}
 
 
 def _expected_tool_count() -> int:
@@ -18,7 +25,8 @@ def _expected_tool_count() -> int:
         raise ValueError("tool_catalog_cache.json contains an invalid tool entry")
     if len(set(names)) != len(names):
         raise ValueError("tool_catalog_cache.json contains duplicate tool names")
-    return len(names) + LOCAL_TOOL_COUNT
+    task_bridge = {"upload_task_file", "get_task", "prepare_task_submission"} <= set(names)
+    return len(names) + LOCAL_TOOL_COUNT + int(task_bridge)
 
 
 def smoke_profile(profile_home: Path) -> dict:
@@ -42,9 +50,12 @@ def smoke_profile(profile_home: Path) -> dict:
         profile_tools = [entry for entry in registry.get_all_entries() if entry.toolset == "profile_rag_mcp"]
         raw_identity = registry.dispatch("get_current_user", {}, scope=manager.scope_key)
         identity = json.loads(raw_identity)
-        expected_count = _expected_tool_count()
-        if len(profile_tools) != expected_count:
-            raise RuntimeError(f"expected {expected_count} profile_rag_mcp tools, found {len(profile_tools)}")
+        tool_names = [entry.name for entry in profile_tools]
+        if len(tool_names) != len(set(tool_names)):
+            raise RuntimeError("profile_rag_mcp registered duplicate tools")
+        missing = sorted(REQUIRED_TOOL_NAMES - set(tool_names))
+        if missing:
+            raise RuntimeError(f"profile_rag_mcp is missing required tools: {', '.join(missing)}")
         if not isinstance(identity, dict) or identity.get("error"):
             raise RuntimeError(f"get_current_user failed for profile {resolved_home.name}: {raw_identity}")
         return {

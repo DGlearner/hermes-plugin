@@ -31,7 +31,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "0.11.0"
+PLUGIN_VERSION = "0.12.0"
 DOWNLOAD_HOSTS_ENV = "PROFILE_RAG_MCP_DOWNLOAD_HOSTS"
 DOWNLOAD_CACHE_DIR = "knowledge-downloads"
 DOWNLOAD_TTL_SECONDS = 60 * 60
@@ -1006,6 +1006,36 @@ def _install_profile_transcript_scope() -> bool:
                     reason=reason,
                 )
             return result
+
+        original_set_expiry_finalized = getattr(
+            SessionStore, "set_expiry_finalized", None
+        )
+        if callable(original_set_expiry_finalized):
+            @wraps(original_set_expiry_finalized)
+            def _set_expiry_finalized(store, entry, *args, **kwargs):
+                reason = "session_reset"
+                source = getattr(entry, "origin", None)
+                should_reset = getattr(store, "_should_reset", None)
+                if source is not None and callable(should_reset):
+                    try:
+                        reason = str(should_reset(entry, source) or reason)
+                    except (OSError, RuntimeError, TypeError, ValueError):
+                        logger.debug(
+                            "profile-rag-mcp could not resolve Profile Session expiry reason",
+                            exc_info=True,
+                        )
+                result = _in_root_scope(
+                    lambda: original_set_expiry_finalized(store, entry, *args, **kwargs)
+                )
+                _promote_profile_session(
+                    store,
+                    profile_hint=_entry_profile(entry, source),
+                    session_id=str(getattr(entry, "session_id", "") or ""),
+                    reason=reason,
+                )
+                return result
+
+            SessionStore.set_expiry_finalized = _set_expiry_finalized
 
         SessionStore.reset_session = _reset_session
         SessionStore.get_or_create_session = _get_or_create_session
@@ -3216,6 +3246,66 @@ def _upload_attachment_handler(endpoint: str, timeout: float) -> Callable[..., s
     return _handler
 
 
+def _upload_task_attachment_handler(endpoint: str, timeout: float) -> Callable[..., str]:
+    def handler(arguments: dict[str, Any], **kwargs: Any) -> str:
+        if not isinstance(arguments, dict) or set(arguments) - {"task_no", "idempotency_key", "attachment_path"}:
+            return _error("Invalid task attachment arguments", error_type="invalid_arguments")
+        task_no = str(arguments.get("task_no") or "").strip().upper()
+        key = str(arguments.get("idempotency_key") or "").strip()
+        if not re.fullmatch(r"[A-Z0-9-]{1,50}", task_no) or not 1 <= len(key) <= 200:
+            return _error("Task number and upload intent are required", error_type="invalid_arguments")
+        grant, error = _resolve_authorized_attachment(arguments, kwargs)
+        if error or grant is None:
+            return error or _error("Attachment unavailable", error_type="attachment_missing")
+        # Respect server publication/ACL before opening the cached original; never repurpose knowledge upload.
+        task, error = _structured_tool_result(_call_mcp(endpoint, timeout, "get_task", {"task_no": task_no}))
+        if error or "prepare_submission" not in (task or {}).get("allowed_actions", ()):
+            return _error("Task is not available for your feedback", error_type="task_access")
+        parsed = urlsplit(endpoint)
+        if parsed.scheme != "https" or parsed.username or parsed.password or not parsed.hostname:
+            return _error("Task upload requires the configured HTTPS MCP origin", error_type="invalid_endpoint")
+        session_id = str(kwargs.get("session_id") or kwargs.get("task_id") or "").strip()
+        try:
+            _profile_name()
+            pat = _read_profile_pat()
+            if not pat:
+                return _error("Employee connection unavailable", error_type="missing_credential")
+            url = urlunsplit((parsed.scheme, parsed.netloc, f"/api/tasks/{task_no}/files", "", ""))
+            with _attachment_processing_lease(grant), _GrantPathOpen(grant) as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+                source.seek(0)
+                with httpx.Client(follow_redirects=False, trust_env=False, timeout=timeout) as client:
+                    response = client.post(url, headers={"Authorization": f"Bearer {pat}"},
+                                           data={"idempotency_key": key},
+                                           files={"file": (grant.file_name, source, grant.media_type)})
+                if response.status_code != 200:
+                    return _error("Task file upload rejected; check type, size and task access", error_type="task_upload")
+                result = response.json()
+                if result.get("sha256") != digest or result.get("size") != grant.size or not result.get("file_id"):
+                    return _error("Task file receipt did not match the original", error_type="invalid_response")
+                _consume_attachment(session_id, grant)
+                return _json({"file_id": result["file_id"], "file_name": result["file_name"],
+                              "size": result["size"], "sha256": result["sha256"], "status": "uploaded",
+                              "next_action": "Save feedback with file_ids; show the draft and obtain explicit confirmation before publication."})
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError, httpx.HTTPError):
+            return _error("Task file transfer failed; retry the same intent or resend the attachment", error_type="task_upload")
+    return handler
+
+
+def _task_attachment_schema() -> dict[str, Any]:
+    return {
+        "name": "upload_wechat_task_attachment",
+        "description": "Upload the current authorized Weixin attachment as ORIGINAL task feedback, without knowledge "
+        "ingestion or local analysis. The task must already be started by you. Do not call knowledge upload for task "
+        "feedback. Return file_id for prepare_task_submission.file_ids; uploading alone never publishes or scores work. "
+        "Submit files individually, not ZIP archives. Obtain explicit user confirmation before publish_task_submission.",
+        "input_schema": {"type": "object", "properties": {
+            "task_no": {"type": "string"}, "idempotency_key": {"type": "string"},
+            "attachment_path": {"type": "string", "description": "Exact current attachment cache path; omit for a single attachment."},
+        }, "required": ["task_no", "idempotency_key"], "additionalProperties": False},
+    }
+
+
 def _knowledge_download_root(home: Path) -> Path:
     root = home / DOWNLOAD_CACHE_DIR
     if root.is_symlink():
@@ -3597,7 +3687,11 @@ def register(ctx) -> None:
         "analyze_wechat_attachment": _analyze_attachment_handler(endpoint, timeout),
         "upload_wechat_knowledge_attachment": _upload_attachment_handler(endpoint, timeout),
     }
-    for item in _local_tool_schemas():
+    local_schemas = _local_tool_schemas()
+    if {"upload_task_file", "get_task", "prepare_task_submission"} <= {item["name"] for item in schemas}:
+        local_handlers["upload_wechat_task_attachment"] = _upload_task_attachment_handler(endpoint, timeout)
+        local_schemas = (*local_schemas, _task_attachment_schema())
+    for item in local_schemas:
         name = item["name"]
         description = str(item["description"])
         handle = ctx.register_tool(
