@@ -4,6 +4,7 @@ import asyncio
 import threading
 from ipaddress import ip_network
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -13,6 +14,7 @@ from wechat_provisioner.app import create_app
 from wechat_provisioner.contracts import WechatQrRequest
 from wechat_provisioner.errors import ProvisioningError
 from wechat_provisioner.qr_login import (
+    InstalledWeixinQrBackend,
     WechatQrLoginService,
     WeixinQrChallenge,
     WeixinQrCredentials,
@@ -93,6 +95,78 @@ class FakeControl:
 
     def check_ready(self) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_installed_weixin_backend_uses_current_ilink_api_contract() -> None:
+    calls: list[dict] = []
+
+    class Session:
+        def __init__(self, **options):
+            assert options == {"connector": None, "trust_env": True}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def api_get(session, **kwargs):
+        assert isinstance(session, Session)
+        calls.append(kwargs)
+        return {"ret": 0}
+
+    weixin = SimpleNamespace(
+        aiohttp=SimpleNamespace(ClientSession=Session),
+        _make_ssl_connector=lambda: None,
+        _api_get=api_get,
+    )
+    await InstalledWeixinQrBackend._get(
+        weixin,
+        "https://ilinkai.weixin.qq.com",
+        "ilink/bot/get_bot_qrcode",
+        params={"bot_type": "3"},
+    )
+    assert calls == [{
+        "base_url": "https://ilinkai.weixin.qq.com",
+        "endpoint": "ilink/bot/get_bot_qrcode?bot_type=3",
+        "timeout_ms": 8_000,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_installed_weixin_backend_reads_current_confirmation_fields(monkeypatch) -> None:
+    weixin = SimpleNamespace(
+        ILINK_BASE_URL="https://ilinkai.weixin.qq.com",
+        EP_GET_BOT_QR="ilink/bot/get_bot_qrcode",
+        EP_GET_QR_STATUS="ilink/bot/get_qrcode_status",
+        WEIXIN_CDN_BASE_URL="https://novac2c.cdn.weixin.qq.com/c2c",
+    )
+    statuses = [
+        {"status": "scaned_but_redirect", "redirect_host": "sh.ilinkai.weixin.qq.com"},
+        {"status": "confirmed", "ilink_bot_id": "bot-account", "bot_token": "secret-token"},
+    ]
+
+    async def fake_get(_weixin, _base_url, endpoint, *, params):
+        if endpoint == weixin.EP_GET_BOT_QR:
+            assert params == {"bot_type": "3"}
+            return {"ret": 0, "qrcode": "qr-token", "qrcode_img_content": "scan-url"}
+        assert params == {"qrcode": "qr-token"}
+        return statuses.pop(0)
+
+    monkeypatch.setattr(InstalledWeixinQrBackend, "_weixin_module", staticmethod(lambda: weixin))
+    monkeypatch.setattr(InstalledWeixinQrBackend, "_get", staticmethod(fake_get))
+    monkeypatch.setattr(InstalledWeixinQrBackend, "_qr_data_url", staticmethod(lambda _data: "data:image/png;base64,AAAA"))
+
+    backend = InstalledWeixinQrBackend()
+    challenge = await backend.start()
+    redirected = await backend.poll(qr_token=challenge.qr_token, base_url=challenge.base_url)
+    confirmed = await backend.poll(qr_token=challenge.qr_token, base_url=redirected.base_url)
+
+    assert redirected.base_url == "https://sh.ilinkai.weixin.qq.com"
+    assert confirmed.status == "confirmed"
+    assert confirmed.credentials is not None
+    assert confirmed.credentials.token == "secret-token"
 
 
 @pytest.mark.asyncio

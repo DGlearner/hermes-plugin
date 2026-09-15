@@ -7,13 +7,31 @@ import math
 import time
 from dataclasses import dataclass
 from typing import Literal, Protocol
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID, uuid4
 
 from .contracts import WechatQrRequest, WechatQrResponse
 from .errors import ProvisioningError
 
 QR_SESSION_TTL_SECONDS = 480
-QR_POLL_TIMEOUT_MS = 1_500
+QR_REQUEST_TIMEOUT_MS = 8_000
+
+
+def _trusted_ilink_base(value: str) -> str:
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme != "https"
+        or not (host == "ilinkai.weixin.qq.com" or host.endswith(".ilinkai.weixin.qq.com"))
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Invalid iLink origin")
+    return value.rstrip("/")
 
 
 @dataclass(frozen=True)
@@ -76,7 +94,8 @@ class InstalledWeixinQrBackend:
         try:
             data = await self._get(
                 weixin,
-                f"{weixin.ILINK_BASE_URL}{weixin.EP_GET_BOT_QR}",
+                weixin.ILINK_BASE_URL,
+                weixin.EP_GET_BOT_QR,
                 params={"bot_type": "3"},
             )
             if data.get("ret") != 0 or not data.get("qrcode") or not data.get("qrcode_img_content"):
@@ -105,8 +124,9 @@ class InstalledWeixinQrBackend:
         try:
             data = await self._get(
                 weixin,
-                f"{base_url}{weixin.EP_GET_QR_STATUS}",
-                params={"qrcode": qr_token, "timeout": str(QR_POLL_TIMEOUT_MS)},
+                base_url,
+                weixin.EP_GET_QR_STATUS,
+                params={"qrcode": qr_token},
             )
             status = str(data.get("status") or "")
             if status == "wait":
@@ -114,8 +134,13 @@ class InstalledWeixinQrBackend:
             if status == "scaned":
                 return WeixinQrPoll(status="scanned", base_url=base_url)
             if status == "scaned_but_redirect":
+                redirect_host = str(data.get("redirect_host") or "").strip()
                 redirect_id = str(data.get("ilink_bot_id") or "").strip()
-                redirected = f"https://{redirect_id}.ilinkai.weixin.qq.com" if redirect_id else base_url
+                redirected = (
+                    f"https://{redirect_host}" if redirect_host else
+                    f"https://{redirect_id}.ilinkai.weixin.qq.com" if redirect_id else base_url
+                )
+                redirected = _trusted_ilink_base(redirected)
                 return WeixinQrPoll(status="scanned", base_url=redirected)
             if status == "expired":
                 return WeixinQrPoll(status="expired", base_url=base_url)
@@ -123,8 +148,8 @@ class InstalledWeixinQrBackend:
                 raise ValueError("invalid QR status")
 
             account_id = str(data.get("ilink_bot_id") or "").strip()
-            token = str(data.get("ilink_bot_token") or "").strip()
-            confirmed_base_url = str(data.get("baseurl") or base_url).strip()
+            token = str(data.get("bot_token") or data.get("ilink_bot_token") or "").strip()
+            confirmed_base_url = _trusted_ilink_base(str(data.get("baseurl") or base_url).strip())
             cdn_base_url = str(data.get("cdn_baseurl") or weixin.WEIXIN_CDN_BASE_URL).strip()
             if not account_id or not token or not confirmed_base_url or not cdn_base_url:
                 raise ValueError("incomplete QR credentials")
@@ -149,10 +174,15 @@ class InstalledWeixinQrBackend:
             ) from exc
 
     @staticmethod
-    async def _get(weixin, url: str, *, params: dict[str, str]) -> dict:
+    async def _get(weixin, base_url: str, endpoint: str, *, params: dict[str, str]) -> dict:
         connector = weixin._make_ssl_connector()
-        async with weixin.aiohttp.ClientSession(connector=connector) as session:
-            return await weixin._api_get(session, url, params=params, use_token=False)
+        async with weixin.aiohttp.ClientSession(connector=connector, trust_env=True) as session:
+            return await weixin._api_get(
+                session,
+                base_url=_trusted_ilink_base(base_url),
+                endpoint=f"{endpoint}?{urlencode(params)}",
+                timeout_ms=QR_REQUEST_TIMEOUT_MS,
+            )
 
     @staticmethod
     def _weixin_module():
