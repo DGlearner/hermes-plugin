@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import logging
 import math
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 from urllib.parse import urlencode, urlsplit
 from uuid import UUID, uuid4
@@ -15,6 +17,8 @@ from .errors import ProvisioningError
 
 QR_SESSION_TTL_SECONDS = 480
 QR_REQUEST_TIMEOUT_MS = 8_000
+MAX_ACTIVE_QR_SESSIONS = 64
+logger = logging.getLogger(__name__)
 
 
 def _trusted_ilink_base(value: str) -> str:
@@ -84,6 +88,7 @@ class _QrSession:
     status: Literal["waiting", "scanned", "connecting", "connected", "expired", "failed"]
     created_at: float
     expires_at: float
+    poll_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 class InstalledWeixinQrBackend:
@@ -98,7 +103,14 @@ class InstalledWeixinQrBackend:
                 weixin.EP_GET_BOT_QR,
                 params={"bot_type": "3"},
             )
-            if data.get("ret") != 0 or not data.get("qrcode") or not data.get("qrcode_img_content"):
+            if data.get("ret") != 0:
+                result_code = data.get("ret")
+                logger.warning(
+                    "WeChat QR request rejected: result_code=%s",
+                    result_code if isinstance(result_code, int) else "noninteger",
+                )
+                raise ValueError("invalid QR response")
+            if not data.get("qrcode") or not data.get("qrcode_img_content"):
                 raise ValueError("invalid QR response")
             qr_token = str(data["qrcode"]).strip()
             qr_content = str(data["qrcode_img_content"]).strip()
@@ -112,6 +124,12 @@ class InstalledWeixinQrBackend:
         except ProvisioningError:
             raise
         except Exception as exc:
+            http_status = re.search(r"\bHTTP (\d{3})\b", str(exc))
+            logger.warning(
+                "WeChat QR creation failed: error_type=%s http_status=%s",
+                type(exc).__name__,
+                http_status.group(1) if http_status else "none",
+            )
             raise ProvisioningError(
                 "wechat_qr_unavailable",
                 "WeChat could not create a login QR code. Try again shortly.",
@@ -241,6 +259,7 @@ class WechatQrLoginService:
         self._ttl_seconds = max(60, min(QR_SESSION_TTL_SECONDS, int(ttl_seconds)))
         self._clock = clock
         self._lock = asyncio.Lock()
+        self._install_lock = asyncio.Lock()
         self._sessions: dict[UUID, _QrSession] = {}
         self._install_tasks: dict[UUID, asyncio.Task[ProvisioningError | None]] = {}
 
@@ -256,13 +275,17 @@ class WechatQrLoginService:
                     "connected",
                 }:
                     return self._response(session, now)
-                if session.status in {"waiting", "scanned", "connecting"}:
-                    raise ProvisioningError(
-                        "wechat_qr_login_busy",
-                        "Another WeChat QR login is in progress. Try again shortly.",
-                        status_code=409,
-                        retryable=True,
-                    )
+            active_count = sum(
+                session.status in {"waiting", "scanned", "connecting"}
+                for session in self._sessions.values()
+            )
+            if active_count >= MAX_ACTIVE_QR_SESSIONS:
+                raise ProvisioningError(
+                    "wechat_qr_capacity",
+                    "Too many WeChat QR logins are in progress. Try again shortly.",
+                    status_code=503,
+                    retryable=True,
+                )
 
             await asyncio.to_thread(self._control.ensure_employee_profile, request)
             challenge = await self._backend.start()
@@ -282,11 +305,8 @@ class WechatQrLoginService:
             return self._response(session, now)
 
     async def poll(self, session_id: UUID, request: WechatQrRequest) -> WechatQrResponse:
-        credentials: WeixinQrCredentials | None = None
-        install_task: asyncio.Task[ProvisioningError | None] | None = None
         async with self._lock:
-            now = self._clock()
-            self._prune(now)
+            self._prune(self._clock())
             session = self._sessions.get(session_id)
             if session is None or session.employee_id != request.employee_id:
                 raise ProvisioningError(
@@ -294,49 +314,53 @@ class WechatQrLoginService:
                     "The WeChat QR login session was not found or has expired.",
                     status_code=404,
                 )
-            if session.status in {"connected", "expired", "failed", "connecting"}:
-                return self._response(session, now)
-            if now >= session.expires_at:
-                session.status = "expired"
-                session.qr_image = None
-                session.qr_token = ""
-                return self._response(session, now)
 
-            result = await self._backend.poll(qr_token=session.qr_token, base_url=session.base_url)
-            session.base_url = result.base_url
-            if result.status == "expired":
-                session.status = "expired"
+        async with session.poll_lock:
+            async with self._lock:
+                now = self._clock()
+                self._prune(now)
+                if session.status in {"connected", "expired", "failed", "connecting"}:
+                    return self._response(session, now)
+                qr_token, base_url = session.qr_token, session.base_url
+
+            result = await self._backend.poll(qr_token=qr_token, base_url=base_url)
+
+            async with self._lock:
+                now = self._clock()
+                self._prune(now)
+                if session.status in {"connected", "expired", "failed", "connecting"}:
+                    return self._response(session, now)
+                session.base_url = result.base_url
+                if result.status == "expired":
+                    session.status = "expired"
+                    session.qr_image = None
+                    session.qr_token = ""
+                    return self._response(session, now)
+                if result.status in {"waiting", "scanned"}:
+                    session.status = result.status
+                    return self._response(session, now)
+                if result.credentials is None:
+                    session.status = "failed"
+                    raise ProvisioningError(
+                        "wechat_qr_invalid_confirmation",
+                        "WeChat returned an incomplete login confirmation.",
+                        status_code=503,
+                    )
+                session.status = "connecting"
                 session.qr_image = None
                 session.qr_token = ""
-                return self._response(session, now)
-            if result.status in {"waiting", "scanned"}:
-                session.status = result.status
-                return self._response(session, now)
-            credentials = result.credentials
-            if credentials is None:
-                session.status = "failed"
-                raise ProvisioningError(
-                    "wechat_qr_invalid_confirmation",
-                    "WeChat returned an incomplete login confirmation.",
-                    status_code=503,
+                install_task = asyncio.create_task(self._finish_install(session, result.credentials))
+                self._install_tasks[session.session_id] = install_task
+                install_task.add_done_callback(
+                    lambda completed, key=session.session_id: self._forget_install_task(key, completed)
                 )
-            session.status = "connecting"
-            session.qr_image = None
-            session.qr_token = ""
-            install_task = asyncio.create_task(self._finish_install(session, credentials))
-            self._install_tasks[session.session_id] = install_task
-            install_task.add_done_callback(
-                lambda completed, key=session.session_id: self._forget_install_task(key, completed)
-            )
 
-        # The activation task owns the final state transition. Shielding it means an
-        # HTTP disconnect or client cancellation cannot strand the in-memory QR
-        # session in `connecting` while the blocking Gateway restart continues.
-        error = await asyncio.shield(install_task)
-        if error is not None:
-            raise error
-        async with self._lock:
-            return self._response(session, self._clock())
+            # The activation task survives a browser request cancelled during Gateway restart.
+            error = await asyncio.shield(install_task)
+            if error is not None:
+                raise error
+            async with self._lock:
+                return self._response(session, self._clock())
 
     async def _finish_install(
         self,
@@ -345,11 +369,12 @@ class WechatQrLoginService:
     ) -> ProvisioningError | None:
         error: ProvisioningError | None = None
         try:
-            await asyncio.to_thread(
-                self._control.install_profile_weixin_credentials,
-                profile_name=session.profile_name,
-                credentials=credentials,
-            )
+            async with self._install_lock:
+                await asyncio.to_thread(
+                    self._control.install_profile_weixin_credentials,
+                    profile_name=session.profile_name,
+                    credentials=credentials,
+                )
         except ProvisioningError as exc:
             error = exc
         except Exception as exc:  # noqa: BLE001 - normalize arbitrary runtime activation failures

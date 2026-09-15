@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from ipaddress import ip_network
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,7 +171,28 @@ async def test_installed_weixin_backend_reads_current_confirmation_fields(monkey
 
 
 @pytest.mark.asyncio
-async def test_qr_login_is_employee_scoped_singleton_and_installs_only_after_confirmation() -> None:
+async def test_weixin_qr_failure_logs_no_upstream_payload(monkeypatch, caplog) -> None:
+    weixin = SimpleNamespace(
+        ILINK_BASE_URL="https://ilinkai.weixin.qq.com",
+        EP_GET_BOT_QR="ilink/bot/get_bot_qrcode",
+    )
+
+    async def rejected(_weixin, _base_url, _endpoint, *, params):
+        assert params == {"bot_type": "3"}
+        return {"ret": "do-not-log-upstream-body", "qrcode": "private-qr-token"}
+
+    monkeypatch.setattr(InstalledWeixinQrBackend, "_weixin_module", staticmethod(lambda: weixin))
+    monkeypatch.setattr(InstalledWeixinQrBackend, "_get", staticmethod(rejected))
+    with pytest.raises(ProvisioningError) as unavailable:
+        await InstalledWeixinQrBackend().start()
+
+    assert unavailable.value.code == "wechat_qr_unavailable"
+    assert "do-not-log-upstream-body" not in caplog.text
+    assert "private-qr-token" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_qr_login_is_employee_scoped_and_installs_only_after_confirmation() -> None:
     clock = FakeClock()
     backend = FakeBackend()
     control = FakeControl()
@@ -184,9 +206,13 @@ async def test_qr_login_is_employee_scoped_singleton_and_installs_only_after_con
     assert control.installs == []
     assert "temporary-qr-token" not in started.model_dump_json()
 
-    with pytest.raises(ProvisioningError) as busy:
-        await service.start(request(OTHER_EMPLOYEE_ID))
-    assert busy.value.code == "wechat_qr_login_busy"
+    other = await service.start(request(OTHER_EMPLOYEE_ID))
+    assert other.session_id != started.session_id
+    assert backend.starts == 2
+
+    with pytest.raises(ProvisioningError) as hidden:
+        await service.poll(started.session_id, request(OTHER_EMPLOYEE_ID))
+    assert hidden.value.code == "wechat_qr_session_not_found"
 
     scanned = await service.poll(started.session_id, request())
     assert scanned.status == "scanned"
@@ -203,6 +229,129 @@ async def test_qr_login_is_employee_scoped_singleton_and_installs_only_after_con
         ("temporary-qr-token", "https://initial.example"),
         ("temporary-qr-token", "https://redirected.example"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_slow_employee_poll_does_not_block_another_employee_confirmation() -> None:
+    first_started = asyncio.Event()
+    first_release = asyncio.Event()
+
+    class IndependentBackend(FakeBackend):
+        async def start(self) -> WeixinQrChallenge:
+            self.starts += 1
+            return WeixinQrChallenge(
+                qr_token=f"employee-qr-{self.starts}",
+                qr_image="data:image/png;base64,AAAA",
+                base_url="https://initial.example",
+            )
+
+        async def poll(self, *, qr_token: str, base_url: str) -> WeixinQrPoll:
+            self.polls.append((qr_token, base_url))
+            if qr_token == "employee-qr-1":
+                first_started.set()
+                await first_release.wait()
+            return WeixinQrPoll(
+                status="confirmed",
+                base_url="https://confirmed.example",
+                credentials=WeixinQrCredentials(
+                    account_id=qr_token,
+                    token=f"credential-{qr_token}",
+                    base_url="https://confirmed.example",
+                    cdn_base_url="https://cdn.example",
+                ),
+            )
+
+    control = FakeControl()
+    service = WechatQrLoginService(control, IndependentBackend())
+    first = await service.start(request())
+    second = await service.start(request(OTHER_EMPLOYEE_ID))
+    first_poll = asyncio.create_task(service.poll(first.session_id, request()))
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        second_result = await asyncio.wait_for(
+            service.poll(second.session_id, request(OTHER_EMPLOYEE_ID)), timeout=1
+        )
+        assert second_result.status == "connected"
+    finally:
+        first_release.set()
+        await first_poll
+
+    assert first_poll.result().status == "connected"
+    assert {(profile, credentials.account_id) for profile, credentials in control.installs} == {
+        (request().profile_name, "employee-qr-1"),
+        (request(OTHER_EMPLOYEE_ID).profile_name, "employee-qr-2"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_confirmations_serialize_gateway_activation() -> None:
+    class SlowInstallControl(FakeControl):
+        def __init__(self) -> None:
+            super().__init__()
+            self.guard = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def install_profile_weixin_credentials(
+            self,
+            *,
+            profile_name: str,
+            credentials: WeixinQrCredentials,
+        ) -> None:
+            with self.guard:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.05)
+                super().install_profile_weixin_credentials(
+                    profile_name=profile_name, credentials=credentials
+                )
+            finally:
+                with self.guard:
+                    self.active -= 1
+
+    backend = FakeBackend()
+    backend.results = [
+        WeixinQrPoll(
+            status="confirmed",
+            base_url="https://confirmed.example",
+            credentials=WeixinQrCredentials(
+                account_id=f"account-{employee}",
+                token=f"credential-{employee}",
+                base_url="https://confirmed.example",
+                cdn_base_url="https://cdn.example",
+            ),
+        )
+        for employee in (1, 2)
+    ]
+    control = SlowInstallControl()
+    service = WechatQrLoginService(control, backend)
+    first = await service.start(request())
+    second = await service.start(request(OTHER_EMPLOYEE_ID))
+
+    results = await asyncio.gather(
+        service.poll(first.session_id, request()),
+        service.poll(second.session_id, request(OTHER_EMPLOYEE_ID)),
+    )
+    assert [result.status for result in results] == ["connected", "connected"]
+    assert control.max_active == 1
+    assert len(control.installs) == 2
+
+
+@pytest.mark.asyncio
+async def test_qr_login_capacity_applies_only_at_limit_and_expires() -> None:
+    clock = FakeClock()
+    backend = FakeBackend()
+    service = WechatQrLoginService(FakeControl(), backend, ttl_seconds=60, clock=clock)
+    for employee in range(1, 65):
+        await service.start(request(UUID(int=employee)))
+
+    with pytest.raises(ProvisioningError) as full:
+        await service.start(request(UUID(int=65)))
+    assert full.value.code == "wechat_qr_capacity"
+
+    clock.value += 61
+    assert (await service.start(request(UUID(int=65)))).status == "waiting"
 
 
 @pytest.mark.asyncio
