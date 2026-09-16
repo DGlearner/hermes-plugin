@@ -181,6 +181,9 @@ class InstalledWeixinQrBackend:
                     cdn_base_url=cdn_base_url,
                 ),
             )
+        except asyncio.TimeoutError:
+            # iLink long-polls while no scan is available; our bounded wait is not an expiry.
+            return WeixinQrPoll(status="waiting", base_url=base_url)
         except ProvisioningError:
             raise
         except Exception as exc:
@@ -351,7 +354,8 @@ class WechatQrLoginService:
                     session.qr_token = ""
                     return self._response(session, now)
                 if result.status in {"waiting", "scanned"}:
-                    session.status = result.status
+                    if result.status == "scanned" or session.status != "scanned":
+                        session.status = result.status
                     return self._response(session, now)
                 if result.credentials is None:
                     session.status = "failed"

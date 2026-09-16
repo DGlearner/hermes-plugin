@@ -1045,6 +1045,30 @@ def _install_profile_transcript_scope() -> bool:
     return installed
 
 
+def _install_weixin_provider_status_filter() -> bool:
+    """Keep terminal provider errors in the final reply rather than sending them twice."""
+    try:
+        from gateway import run
+    except ImportError:
+        return False
+    original = getattr(run, "_prepare_gateway_status_message", None)
+    is_provider_error = getattr(run, "_looks_like_gateway_provider_error", None)
+    if not callable(original) or not callable(is_provider_error):
+        return False
+    if getattr(original, "_profile_rag_weixin_provider_filter", False):
+        return False
+
+    @wraps(original)
+    def prepare_status(platform, event_type, message):
+        if getattr(platform, "value", platform) == "weixin" and is_provider_error(str(message or "")):
+            return None
+        return original(platform, event_type, message)
+
+    prepare_status._profile_rag_weixin_provider_filter = True
+    run._prepare_gateway_status_message = prepare_status
+    return True
+
+
 def _install_attachment_capture() -> bool:
     """Capture adapter-verified media paths before they become model-visible text."""
     try:
@@ -3637,6 +3661,7 @@ def register(ctx) -> None:
     shared_model_env_enabled = _configure_shared_model_secret()
     transcript_scope_installed = _install_profile_transcript_scope()
     hot_reload_installed = _install_profile_hot_reload()
+    _install_weixin_provider_status_filter()
     attachment_capture_installed = _install_attachment_capture()
     media_batching_installed = _install_weixin_media_batching()
     clarify_reply_installed = _install_weixin_clarify_reply_routing()

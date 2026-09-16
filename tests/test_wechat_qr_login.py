@@ -171,6 +171,55 @@ async def test_installed_weixin_backend_reads_current_confirmation_fields(monkey
 
 
 @pytest.mark.asyncio
+async def test_status_timeouts_keep_the_same_qr_until_confirmation(monkeypatch) -> None:
+    weixin = SimpleNamespace(EP_GET_QR_STATUS="ilink/bot/get_qrcode_status")
+    backend = InstalledWeixinQrBackend()
+    control = FakeControl()
+    clock = FakeClock()
+    service = WechatQrLoginService(control, backend, clock=clock)
+    attempts = 0
+
+    async def start():
+        return WeixinQrChallenge("private-qr-token", "data:image/png;base64,AAAA", "https://ilinkai.weixin.qq.com")
+
+    async def poll_get(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            raise asyncio.TimeoutError()
+        return {"status": "confirmed", "ilink_bot_id": "bot-account", "bot_token": "secret"}
+
+    weixin.WEIXIN_CDN_BASE_URL = "https://cdn.example"
+    monkeypatch.setattr(backend, "start", start)
+    monkeypatch.setattr(backend, "_weixin_module", lambda: weixin)
+    monkeypatch.setattr(backend, "_get", poll_get)
+    started = await service.start(request())
+    for _ in range(3):
+        clock.value += 10
+        waiting = await service.poll(started.session_id, request())
+        assert waiting.status == "waiting"
+        assert waiting.session_id == started.session_id
+        assert waiting.qr_image == started.qr_image
+        assert waiting.expires_in == 480 - int(clock.value - 1_000)
+        assert control.installs == []
+    assert (await service.poll(started.session_id, request())).status == "connected"
+    assert len(control.installs) == 1
+
+
+@pytest.mark.asyncio
+async def test_waiting_poll_does_not_reset_scanned_status() -> None:
+    backend = FakeBackend()
+    backend.results.insert(1, WeixinQrPoll(status="waiting", base_url="https://redirected.example"))
+    service = WechatQrLoginService(FakeControl(), backend)
+    started = await service.start(request())
+    assert (await service.poll(started.session_id, request())).status == "scanned"
+    waiting = await service.poll(started.session_id, request())
+    assert waiting.status == "scanned"
+    assert waiting.qr_image == started.qr_image
+    assert (await service.poll(started.session_id, request())).status == "connected"
+
+
+@pytest.mark.asyncio
 async def test_weixin_qr_failure_logs_no_upstream_payload(monkeypatch, caplog) -> None:
     weixin = SimpleNamespace(
         ILINK_BASE_URL="https://ilinkai.weixin.qq.com",
