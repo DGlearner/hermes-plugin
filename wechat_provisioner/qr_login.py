@@ -260,49 +260,63 @@ class WechatQrLoginService:
         self._clock = clock
         self._lock = asyncio.Lock()
         self._install_lock = asyncio.Lock()
+        self._start_locks: dict[UUID, asyncio.Lock] = {}
+        self._pending_starts: set[UUID] = set()
         self._sessions: dict[UUID, _QrSession] = {}
         self._install_tasks: dict[UUID, asyncio.Task[ProvisioningError | None]] = {}
 
     async def start(self, request: WechatQrRequest) -> WechatQrResponse:
         async with self._lock:
-            now = self._clock()
-            self._prune(now)
-            for session in self._sessions.values():
-                if session.employee_id == request.employee_id and session.status in {
-                    "waiting",
-                    "scanned",
-                    "connecting",
-                    "connected",
-                }:
-                    return self._response(session, now)
-            active_count = sum(
-                session.status in {"waiting", "scanned", "connecting"}
-                for session in self._sessions.values()
-            )
-            if active_count >= MAX_ACTIVE_QR_SESSIONS:
-                raise ProvisioningError(
-                    "wechat_qr_capacity",
-                    "Too many WeChat QR logins are in progress. Try again shortly.",
-                    status_code=503,
-                    retryable=True,
-                )
+            start_lock = self._start_locks.setdefault(request.employee_id, asyncio.Lock())
 
-            await asyncio.to_thread(self._control.ensure_employee_profile, request)
-            challenge = await self._backend.start()
-            session_id = uuid4()
-            session = _QrSession(
-                session_id=session_id,
-                employee_id=request.employee_id,
-                profile_name=request.profile_name,
-                qr_token=challenge.qr_token,
-                qr_image=challenge.qr_image,
-                base_url=challenge.base_url,
-                status="waiting",
-                created_at=now,
-                expires_at=now + self._ttl_seconds,
-            )
-            self._sessions[session_id] = session
-            return self._response(session, now)
+        async with start_lock:
+            async with self._lock:
+                now = self._clock()
+                self._prune(now)
+                for session in self._sessions.values():
+                    if session.employee_id == request.employee_id and session.status in {
+                        "waiting",
+                        "scanned",
+                        "connecting",
+                        "connected",
+                    }:
+                        return self._response(session, now)
+                active_count = sum(
+                    session.status in {"waiting", "scanned", "connecting"}
+                    for session in self._sessions.values()
+                )
+                if active_count + len(self._pending_starts) >= MAX_ACTIVE_QR_SESSIONS:
+                    raise ProvisioningError(
+                        "wechat_qr_capacity",
+                        "Too many WeChat QR logins are in progress. Try again shortly.",
+                        status_code=503,
+                        retryable=True,
+                    )
+                self._pending_starts.add(request.employee_id)
+
+            try:
+                await asyncio.to_thread(self._control.ensure_employee_profile, request)
+                challenge = await self._backend.start()
+                async with self._lock:
+                    now = self._clock()
+                    session_id = uuid4()
+                    session = _QrSession(
+                        session_id=session_id,
+                        employee_id=request.employee_id,
+                        profile_name=request.profile_name,
+                        qr_token=challenge.qr_token,
+                        qr_image=challenge.qr_image,
+                        base_url=challenge.base_url,
+                        status="waiting",
+                        created_at=now,
+                        expires_at=now + self._ttl_seconds,
+                    )
+                    self._sessions[session_id] = session
+                    self._pending_starts.discard(request.employee_id)
+                    return self._response(session, now)
+            finally:
+                async with self._lock:
+                    self._pending_starts.discard(request.employee_id)
 
     async def poll(self, session_id: UUID, request: WechatQrRequest) -> WechatQrResponse:
         async with self._lock:

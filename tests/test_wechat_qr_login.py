@@ -232,6 +232,86 @@ async def test_qr_login_is_employee_scoped_and_installs_only_after_confirmation(
 
 
 @pytest.mark.asyncio
+async def test_slow_qr_creation_does_not_block_other_employees(monkeypatch) -> None:
+    from wechat_provisioner import qr_login
+
+    monkeypatch.setattr(qr_login, "MAX_ACTIVE_QR_SESSIONS", 2)
+
+    class SlowBackend:
+        def __init__(self) -> None:
+            self.starts = 0
+            self.first_started = asyncio.Event()
+            self.release_first = asyncio.Event()
+
+        async def start(self) -> WeixinQrChallenge:
+            self.starts += 1
+            number = self.starts
+            if number == 1:
+                self.first_started.set()
+                await self.release_first.wait()
+            return WeixinQrChallenge(
+                qr_token=f"qr-token-{number}",
+                qr_image=f"data:image/png;base64,QR{number}=",
+                base_url="https://initial.example",
+            )
+
+    backend = SlowBackend()
+    service = WechatQrLoginService(FakeControl(), backend)
+    first = asyncio.create_task(service.start(request()))
+    try:
+        await asyncio.wait_for(backend.first_started.wait(), timeout=2)
+        second = await asyncio.wait_for(service.start(request(OTHER_EMPLOYEE_ID)), timeout=2)
+        assert second.status == "waiting"
+        with pytest.raises(ProvisioningError) as full:
+            await service.start(request(UUID(int=3)))
+        assert full.value.code == "wechat_qr_capacity"
+        repeated = asyncio.create_task(service.start(request()))
+        await asyncio.sleep(0)
+        assert not repeated.done()
+    finally:
+        backend.release_first.set()
+    started, reused = await asyncio.gather(first, repeated)
+    assert started.session_id == reused.session_id
+    assert started.session_id != second.session_id
+    assert started.qr_image != second.qr_image
+    assert backend.starts == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_qr_creation_releases_pending_capacity(monkeypatch) -> None:
+    from wechat_provisioner import qr_login
+
+    monkeypatch.setattr(qr_login, "MAX_ACTIVE_QR_SESSIONS", 1)
+
+    class CancelBackend:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.starts = 0
+
+        async def start(self) -> WeixinQrChallenge:
+            self.starts += 1
+            if self.starts == 1:
+                self.started.set()
+                await asyncio.Event().wait()
+            return WeixinQrChallenge(
+                qr_token="new-qr-token",
+                qr_image="data:image/png;base64,AAAA",
+                base_url="https://initial.example",
+            )
+
+    backend = CancelBackend()
+    service = WechatQrLoginService(FakeControl(), backend)
+    creating = asyncio.create_task(service.start(request()))
+    await asyncio.wait_for(backend.started.wait(), timeout=2)
+    creating.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await creating
+
+    assert (await service.start(request(OTHER_EMPLOYEE_ID))).status == "waiting"
+    assert backend.starts == 2
+
+
+@pytest.mark.asyncio
 async def test_slow_employee_poll_does_not_block_another_employee_confirmation() -> None:
     first_started = asyncio.Event()
     first_release = asyncio.Event()
