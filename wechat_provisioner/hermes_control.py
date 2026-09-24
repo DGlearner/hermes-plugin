@@ -46,6 +46,7 @@ EMPLOYEE_WEIXIN_TOOLSETS = (
     "session_search",
     "clarify",
     "profile_rag_mcp",
+    "skills",
 )
 MANAGED_PROFILE_CONFIG_KEYS = (
     "model",
@@ -351,6 +352,9 @@ class InstalledHermesControl:
             self._call_env_writer(PAT_ENV, save_env_value, PAT_ENV, personal_token)
 
     def remove_profile_pat(self, profile_name: str) -> None:
+        from .telegram import telegram_routes
+        if any(r.get("profile") == profile_name for r in telegram_routes(self)):
+            return  # The credential belongs to the employee, not to Weixin alone.
         profile_home = self._profile_home(profile_name)
         if not profile_home.exists():
             return
@@ -561,14 +565,20 @@ class InstalledHermesControl:
 
         platform_toolsets = self._mapping_copy(source_config.get("platform_toolsets"))
         platform_toolsets["weixin"] = list(EMPLOYEE_WEIXIN_TOOLSETS)
+        platform_toolsets["telegram"] = list(EMPLOYEE_WEIXIN_TOOLSETS)
         target["platform_toolsets"] = platform_toolsets
+        skills = self._mapping_copy(target.get("skills"))
+        skills.update(external_dirs=[], trusted_project_dirs=[], write_approval=False)
+        target["skills"] = skills
 
         builtin_toolsets, plugin_toolsets = self._toolset_catalog()
         known_builtin = self._mapping_copy(source_config.get("known_builtin_toolsets"))
         known_builtin["weixin"] = sorted(builtin_toolsets)
+        known_builtin["telegram"] = sorted(builtin_toolsets)
         target["known_builtin_toolsets"] = known_builtin
         known_plugins = self._mapping_copy(source_config.get("known_plugin_toolsets"))
         known_plugins["weixin"] = sorted(plugin_toolsets)
+        known_plugins["telegram"] = sorted(plugin_toolsets)
         target["known_plugin_toolsets"] = known_plugins
 
         target["session_reset"] = dict(SESSION_RESET_POLICY)
@@ -579,6 +589,9 @@ class InstalledHermesControl:
         weixin = self._mapping_copy(platforms.get("weixin"))
         weixin["gateway_restart_notification"] = WEIXIN_GATEWAY_RESTART_NOTIFICATION
         platforms["weixin"] = weixin
+        telegram = self._mapping_copy(platforms.get("telegram"))
+        telegram["gateway_restart_notification"] = False
+        platforms["telegram"] = telegram
         target["platforms"] = platforms
         approvals = self._mapping_copy(source_config.get("approvals"))
         deny = approvals.get("deny")
@@ -586,6 +599,12 @@ class InstalledHermesControl:
         approvals["deny"] = list(dict.fromkeys([*deny_values, "*"]))
         target["approvals"] = approvals
 
+        from employee_models import settings as model_settings, configured_profile
+        routing = model_settings()
+        if routing.get("enabled"):
+            previous = self._read_profile_config(profile_home)
+            choice = (previous.get("employee_model_routing") or {}).get("choice", routing["default"])
+            target = configured_profile(target, routing, choice)
         self._validate_employee_profile_config(target)
         self._write_profile_config(profile_home, target)
 
@@ -616,6 +635,9 @@ class InstalledHermesControl:
                 credential_reference = credential_reference or bool(str(raw_value or "").strip())
                 continue
             if normalized in {"key_env", "api_key_env"}:
+                if str(raw_value).strip() == "HERMES_DEEPSEEK_API_KEY":
+                    result[key] = "HERMES_DEEPSEEK_API_KEY"
+                    continue
                 credential_reference = True
                 continue
             result[key] = cls._replace_model_credentials(raw_value)

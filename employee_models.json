@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "default": "deepseek",
+  "routes": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-flash",
+      "api_key_env": "HERMES_DEEPSEEK_API_KEY",
+      "reasoning_effort": "low"
+    },
+    "gpt": {
+      "base_url": "https://api.yesyeah.xyz/v1",
+      "model": "gpt-6-astra",
+      "api_key_env": "HERMES_SHARED_MODEL_API_KEY",
+      "reasoning_effort": "low"
+    }
+  }
+}

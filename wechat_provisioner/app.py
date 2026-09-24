@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import asyncio
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -19,6 +20,7 @@ from .hermes_control import InstalledHermesControl
 from .qr_login import WechatQrLoginService
 from .service import ProvisioningError, WechatProvisioningService
 from .settings import ProvisionerSettings
+from .telegram import TelegramBindings, TelegramRequest
 from .state import BindingStateStore
 
 
@@ -102,5 +104,19 @@ def create_app(
     )
     async def unbind_wechat(binding_id: UUID, body: UnbindWechatRequest) -> None:
         await provisioning.unbind(binding_id, body)
+
+    telegram = TelegramBindings(control)
+
+    @app.post("/v1/telegram-employees", dependencies=[Depends(require_token)])
+    async def telegram_employees():
+        from .telegram import telegram_routes
+        return {"employee_ids": [str(UUID(r["profile"][9:])) for r in telegram_routes(control)
+                                 if r.get("profile", "").startswith("employee-")]}
+
+    @app.post("/v1/telegram/{operation}", dependencies=[Depends(require_token)])
+    async def telegram_binding(operation: str, body: TelegramRequest):
+        if operation not in {"status", "start", "poll", "revoke"}:
+            raise HTTPException(status_code=404)
+        return await asyncio.to_thread(getattr(telegram, operation), body)
 
     return app

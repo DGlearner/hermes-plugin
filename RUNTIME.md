@@ -56,10 +56,10 @@ The attachment lifecycle and quota defaults are configurable through:
 
 ```env
 PROFILE_RAG_MCP_ATTACHMENT_MAX_BYTES=26214400
-PROFILE_RAG_MCP_ATTACHMENT_BATCH_MAX_FILES=5
-PROFILE_RAG_MCP_ATTACHMENT_SESSION_MAX_FILES=10
-PROFILE_RAG_MCP_ATTACHMENT_SESSION_MAX_BYTES=209715200
-PROFILE_RAG_MCP_ATTACHMENT_PROFILE_MAX_BYTES=314572800
+PROFILE_RAG_MCP_ATTACHMENT_BATCH_MAX_FILES=20
+PROFILE_RAG_MCP_ATTACHMENT_SESSION_MAX_FILES=200
+PROFILE_RAG_MCP_ATTACHMENT_SESSION_MAX_BYTES=1073741824
+PROFILE_RAG_MCP_ATTACHMENT_PROFILE_MAX_BYTES=1073741824
 PROFILE_RAG_MCP_ATTACHMENT_GLOBAL_MAX_BYTES=10737418240
 PROFILE_RAG_MCP_ATTACHMENT_CLEANUP_PERCENT=70
 PROFILE_RAG_MCP_ATTACHMENT_REJECT_PERCENT=85
@@ -118,6 +118,104 @@ Remove the old `company-mcp` entry from each Profile's `mcp_servers` config.
 Keeping both registrations creates duplicate tool-name collisions.
 
 ## Conversation history
+
+### Scheduled task-summary delivery
+
+Profile scripts can call `work_todos.run_reminder(home, username, peer,
+reminder_key=...)`. Use a stable key for a scheduled occurrence, for example
+`work-todos:2026-09-18:09:00`, so repeated execution cannot send the same
+reminder again. The employee PAT is used to query and verify `get_current_user`
+before `list_my_tasks`; each attempt fetches current tasks rather than retaining
+an old report. Replies use that employee's independent Weixin transport or an
+exactly matched route through the shared bot.
+
+The reminder's profile scope masks inherited non-global credentials before
+loading the selected Profile's own secrets. This also applies in fresh cron
+subprocesses, which do not inherit the Gateway's in-memory multiplex flag.
+Without this, inherited default-bot environment variables can falsely enable
+an employee's independent transport and select the wrong context-token directory.
+A missing employee PAT must never fall back to the default Profile's PAT.
+
+Daily reminders support both the scheduled run and first interaction of the day.
+Enable an employee explicitly with
+`ReminderQueue(root).subscribe_daily(profile, peer, expected_username)` and use
+`run_reminder(home, expected_username, peer, daily=True)` in the daily cron script.
+The inbound hook only enqueues work; the background worker queries MCP and sends
+the separate reminder without replacing the normal conversation response.
+Employees without a subscription are not opted in by receiving a message.
+
+Both triggers share one SQLite row with a unique `(employee_id, local_day)` index,
+where `local_day` is the Asia/Shanghai calendar date. This is a delivery ledger,
+not a scan of session history or tool calls. A successful morning reminder makes
+the first-chat trigger a no-op; a successful pre-09:00 interaction reminder makes
+the later cron run a no-op. Repeated inbound messages and concurrent cron runs
+cannot create another occurrence. Manual conversational task queries are separate
+and are not blocked by this daily automation's record.
+
+Daily occurrences wait until local midnight, allowing an afternoon first message
+to trigger a fresh query. The previous day's reminder is not replayed. Existing
+same-day cron records are adopted, preserving sent/uncertain states and allowing
+expired four-hour records to resume on interaction within the same day. Profile
+session rotation does not delete these rows. Sending, sent, and uncertain rows
+are never re-armed, including on a rebind. Generic one-off reminders retain their
+four-hour expiry. The existing attempt cap and identity checks apply to both.
+
+Creating a one-off test does not enable daily delivery. Register a recurring
+`0 9 * * *` job in the employee Profile, with the deployment timezone set to
+`Asia/Shanghai`, an unlimited repeat count, `--no-agent`, and `--deliver local`.
+The script sends through this module itself; a second Weixin delivery target
+would duplicate delivery. Return a nonzero script exit status unless the queue
+state is `sent` (or the script was explicitly invoked in query-only mode).
+
+Delivery state is stored separately from conversation Sessions in
+`<Hermes root>/notifications/work-todos.sqlite3`. It contains binding identity, recipient,
+schedule key, delivery status, attempt count, and sanitized error metadata;
+it contains no PAT, bot token, context token, or task contents. Daily Session
+rotation and Gateway restarts do not clear the queue.
+
+- Explicit frequency limits and connection failures before sending retry after
+  30, 120, and 300 seconds, with at most four delivery rounds in total.
+- An explicit context rejection gets at most one recovery request per round:
+  reread the same account and peer's latest token, using it if it changed;
+  otherwise try without the rejected token. Recheck binding and transport before
+  recovery, retain the original cached token, and reuse the reminder's client ID.
+  A successful response or an ambiguous timeout never triggers this fallback.
+- Rejected context or `prepare failed` waits for a new accepted message on the
+  same employee's bound bot and peer. `prepare failed` is logged as a rejection,
+  not automatically classified as a frequency limit or confirmed token expiry.
+- A new interaction wakes the worker; before catch-up delivery, the worker
+  rechecks the exact binding generation and fetches current tasks again.
+- The worker also compares a non-reversible fingerprint of the exact bot/peer's
+  persisted context against the rejected attempt. A changed context recovers a
+  missed inbound hook across a restart. Unchanged, missing, or another peer's
+  context never triggers this retry. Legacy records establish a baseline once
+  without sending. No token is stored in the queue, and the existing expiry,
+  binding checks, attempt limit, and uncertain-delivery protection still apply.
+- Unbind, rebind, or a credential/employee mismatch cancels the old reminder.
+- A lost send acknowledgement or interrupted send is marked
+  `delivery_uncertain` and never retried automatically, avoiding duplicates.
+- Unsent one-off reminders expire after four hours; daily reminders expire at
+  Asia/Shanghai midnight. Terminal records are retained for
+  seven days. The maintenance worker checks every 15 seconds and wakes earlier
+  when an accepted user message updates the Weixin context.
+
+The `delivery_attempts` table records every HTTP attempt's mode, whether context
+was present, time since the last locally observed inbound message (unknown until
+observed), text length, sanitized rejection, and presence of a message receipt.
+No credential or text body is stored. Attempts are retained for seven days.
+
+The recovery request cannot renew a server-side permission to push to a dormant
+peer. Tencent's documented `getConfig` returns a typing ticket, not a new
+`context_token`; a process restart and daily Session rotation do not refresh it.
+There is no fixed 24-hour expiry enforced by this plugin because the exact
+server-side window is not documented in the protocol. See
+[Tencent's protocol](https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol_zh_CN.md)
+and [the matching Hermes field report](https://github.com/NousResearch/hermes-agent/pull/100815).
+
+Script-triggered delivery logs are written to
+`<Hermes root>/notifications/work-todos-delivery.log`; background retries also use the
+normal Gateway log. These rules improve recovery but do not bypass any Weixin
+restriction on proactive messages or guarantee receipt by the client.
 
 Hermes stores each Profile's sessions and FTS5 history in that Profile's
 `state.db`. Configure predictable session boundaries while keeping old sessions
@@ -318,3 +416,66 @@ python /opt/hermes/plugins/profile_rag_mcp/smoke_test.py \
 
 The command returns only the Profile name, tool count, and readable employee
 identity. It does not print PAT values.
+
+### 2026-09-21: Telegram / Weixin attachment delivery
+
+- Register verified document paths before awaited inbound-text preparation, with a durable pending key scoped to Profile, platform, sender and resolved Session ID. The pre-LLM hook recovers only that Session's pending receipts and supplies its authorized attachment manifest.
+- Telegram private chats now use the same attachment authorization/analysis path as Weixin. Repeated receipt of the same cached path is deduplicated.
+- During an attachment turn, follow-ups use the existing Gateway queue policy instead of interrupting the active model request. Core authorization and control handling remain in place; ordinary text-only conversations retain their configured policy.
+- A late Telegram album item cancels only a pending debounce timer, never an album dispatch already in progress.
+- Receipt/handoff logs report Profile, Session, accepted/rejected counts without attachment contents or credentials.
+- Regression tests: `tests/test_attachment_delivery.py`, `tests/test_attachment_quota_runtime.py`; real Telegram adapter tested without network sends. Full plugin suite passed before reload.
+
+### 2026-09-21: Weixin encrypted document validation
+
+`weixin_media.py` installs a document download override from the mounted plugin. It accepts `aes_key` / `aeskey` in the media or file item, normalizes raw hex/base64 representations, and rejects conflicting or invalid keys. Encrypted references without a key fail closed. Plaintext length (`file_item.len`), supported text decoding and PDF/modern Office signatures are checked before caching. Diagnostics contain reason codes, key field location, byte count and suffix only; no key values, CDN URLs or document content.
+
+Old malformed text caches now return `attachment_content_invalid`; this does not repair historical ciphertext without its original key. A fresh upload is needed. Tests use actual Hermes AES functions and Weixin download code with mocked CDN responses; live client upload remains the final protocol verification.
+
+### Weixin receipt diagnostics (2026-09-21)
+
+Adapter-entry and exit diagnostics now correlate message-ID/sender/filename hashes with pre-download duplicate/policy gates and attempted/saved file counts. Key *field names* are recorded; raw keys, context tokens, CDN query parameters, filenames and document bodies are not. This is instrumentation, not a change to message admission or deduplication. Earlier logs begin after media collection, so absence of an old `inbound` line cannot prove that the Weixin API never delivered that message.
+
+### Telegram private-topic attachment authorization (2026-09-21)
+
+Telegram private bot chats can carry a `thread_id`. The attachment ingress guard
+previously treated any thread as unsupported and silently skipped registration,
+leaving downloaded files visible in the conversation but returning
+`attachment_missing` from analysis and upload tools. Private topics now register
+against their resolved Session ID. Group chats remain excluded; a topic without a
+resolved Session fails closed with a diagnostic rather than entering the shared
+sender-only pending lane. Existing unregistered files are not automatically
+trusted by scanning caches or extracting paths from conversation text.
+
+Regression coverage replays a private-topic envelope through the Gateway capture
+hook, clears in-memory receipts, runs the pre-LLM durable handoff, and exercises
+analysis with/without a path and upload authorization up to the network boundary.
+It also checks different Session/Profile isolation and group rejection. Restoring
+the former thread guard in an isolated copy reproduces the failure.
+## Profile inspection
+
+`profile_inspection.py` contains the native, Profile-scoped preflight used by
+the general inspection Skill. It persists its SQLite state in each Profile's
+`.hermes-profile-inspection.sqlite3`, so `last_checked_at`, observed and
+notified fingerprints, and retry state survive a Gateway restart without
+sharing one Profile's PAT or notification ledger with another Profile.
+
+The optional Profile configuration is:
+
+```yaml
+profile_inspection:
+  enabled: true
+  timezone: Asia/Shanghai
+  work_hours: {start: "09:00", end: "18:00"}
+  interval_minutes: 30 # 30 or 60
+  quiet_hours: {enabled: false, start: "22:00", end: "08:00"}
+  sources: {tasks: true, knowledge_reviews: true}
+  notifications: {max_items: 10}
+```
+
+The scheduler integration must call `InspectionRunner.run()` with the current
+Profile's MCP query, model-summary, and current-channel send adapters. The
+runner performs the MCP query and fingerprint comparison before invoking the
+model; unchanged checks therefore return without a model turn or outbound
+message. Quiet-time changes remain pending and are delivered after quiet time.
+The module also exposes `force=True` for a one-shot manual inspection.

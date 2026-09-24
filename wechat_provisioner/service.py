@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, replace
+from contextlib import nullcontext
 from typing import Protocol
 
 from .contracts import BindWechatRequest, UnbindWechatRequest, WechatBindingResponse
@@ -61,6 +62,11 @@ class WechatProvisioningService:
             await asyncio.to_thread(self._unbind_sync, binding_id, request)
 
     def _bind_sync(self, request: BindWechatRequest) -> WechatBindingResponse:
+        from .telegram import channel_lock
+        with channel_lock(self._control._home) if hasattr(self._control, "_home") else nullcontext():
+            return self._bind_locked(request)
+
+    def _bind_locked(self, request: BindWechatRequest) -> WechatBindingResponse:
         existing = self._state.get(request.binding_id)
         if existing and (existing.employee_id != request.employee_id or existing.profile_name != request.profile_name):
             raise ProvisioningError("binding_conflict", "Binding identity does not match.", status_code=409)
@@ -125,6 +131,11 @@ class WechatProvisioningService:
         )
 
     def _unbind_sync(self, binding_id, request: UnbindWechatRequest) -> None:
+        from .telegram import channel_lock
+        with channel_lock(self._control._home) if hasattr(self._control, "_home") else nullcontext():
+            return self._unbind_locked(binding_id, request)
+
+    def _unbind_locked(self, binding_id, request: UnbindWechatRequest) -> None:
         existing = self._state.get(binding_id)
         if existing and (existing.employee_id != request.employee_id or existing.profile_name != request.profile_name):
             raise ProvisioningError("binding_conflict", "Binding identity does not match.", status_code=409)
