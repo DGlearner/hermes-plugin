@@ -28,6 +28,11 @@ def clean_notice_message(message):
     return '\n'.join(lines).strip()
 
 
+def format_notice(report):
+    """Render one canonical report body without a duplicate model summary."""
+    return f"**日报提醒**\n\n{format_report(report)}\n\n**回复“已读”停止当前提醒。**"
+
+
 def format_report(report):
     kind = report['report_type']
     subject = (report.get('employee_display_name') or report.get('employee_username')) if kind == 'personal' else (report.get('department_name') or report.get('department_code')) if kind == 'department' else '公司'
@@ -146,7 +151,10 @@ class AckInspectionRunner:
                         raise ValueError('empty summary')
                     # Put the stable acknowledgement token in the first line so it
                     # remains visible even when a channel previews or truncates text.
-                    message = f"未读日报提醒\n\n请回复“已读”确认并停止当前提醒\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读”停止当前未读提醒。"
+                    # The model validates/normalizes the change, while the
+                    # channel message keeps one authoritative copy: the source
+                    # report itself.
+                    message = format_notice(report)
                     with db:
                         db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
                 except Exception:
@@ -154,8 +162,9 @@ class AckInspectionRunner:
                         db.execute('UPDATE notices SET summary_attempts=summary_attempts+1,next_send=? WHERE id=?', (now+interval, row['id']))
                     continue
             else:
-                # Upgrade any cached notice created by an older template.
-                message = clean_notice_message(message)
+                # Upgrade any cached notice created by an older template and
+                # remove the previously duplicated summary block.
+                message = format_notice(json.loads(row['payload']))
                 with db:
                     db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
             occurrence = row['round']+1

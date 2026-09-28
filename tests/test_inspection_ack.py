@@ -24,7 +24,7 @@ class AckTests(unittest.TestCase):
  def test_independent_two_and_three_minutes(self):
   self.run_tick();self.run_tick(60);self.run_tick(60);self.run_tick(60)
   self.assertEqual(self.queries,2);self.assertEqual(self.models,1);self.assertEqual(len(self.sent),2)
-  self.assertIn('回复“已读”停止当前未读提醒',self.sent[0][0]);self.assertNotIn('R1',self.sent[0][0]);self.assertIn('正文：\n\ntest',self.sent[0][0])
+  self.assertIn('**日报提醒**',self.sent[0][0]);self.assertIn('**回复“已读”停止当前提醒。**',self.sent[0][0]);self.assertNotIn('R1',self.sent[0][0]);self.assertIn('正文：\n\ntest',self.sent[0][0])
  def test_ack_stops_both_channels_but_queries_continue(self):
   self.run_tick();self.assertIn('已确认',self.ack())
   self.run_tick(180);self.assertEqual(len(self.sent),1);self.assertEqual(self.queries,2)
@@ -33,7 +33,7 @@ class AckTests(unittest.TestCase):
   self.run_tick(180);self.assertEqual(len(self.sent),1);self.assertIn('已确认',self.ack(token='R1'))
  def test_edit_gets_new_receipt(self):
   self.run_tick();self.ack();self.reports[0]['version']=2;self.run_tick(120)
-  self.assertIn('回复“已读”停止当前未读提醒',self.sent[-1][0]);self.assertNotIn('R2',self.sent[-1][0]);self.assertEqual(self.models,2)
+  self.assertIn('**日报提醒**',self.sent[-1][0]);self.assertIn('**回复“已读”停止当前提醒。**',self.sent[-1][0]);self.assertNotIn('R2',self.sent[-1][0]);self.assertEqual(self.models,2)
  def test_plain_ack_clears_multiple(self):
   self.reports.append(dict(self.reports[0],department_code='sales'));self.run_tick()
   self.assertIn('R1、R2',self.ack());self.run_tick(180)
