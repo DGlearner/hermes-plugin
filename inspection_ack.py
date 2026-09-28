@@ -15,6 +15,19 @@ from .profile_inspection import InspectionConfig
 from .daily_inspection import fingerprint, report_key
 
 
+def clean_notice_message(message):
+    """Hide internal notice ids while keeping legacy cached bodies readable."""
+    lines = []
+    for line in message.splitlines():
+        if re.fullmatch(r'【未读提醒 R\d+】|提醒编号：R\d+|请回复“已读(?: R\d+)?”确认当前未读提醒', line.strip()):
+            continue
+        if line.strip().startswith('回复“已读'):
+            lines.append('回复“已读”停止当前未读提醒。')
+            continue
+        lines.append(line)
+    return '\n'.join(lines).strip()
+
+
 def format_report(report):
     kind = report['report_type']
     subject = (report.get('employee_display_name') or report.get('employee_username')) if kind == 'personal' else (report.get('department_name') or report.get('department_code')) if kind == 'department' else '公司'
@@ -133,17 +146,16 @@ class AckInspectionRunner:
                         raise ValueError('empty summary')
                     # Put the stable acknowledgement token in the first line so it
                     # remains visible even when a channel previews or truncates text.
-                    message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读”确认当前未读提醒\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读”停止当前未读提醒；也可回复“已读 R{row['id']}”精确确认或“稍后提醒 R{row['id']}”。"
+                    message = f"未读日报提醒\n\n请回复“已读”确认并停止当前提醒\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读”停止当前未读提醒。"
                     with db:
                         db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
                 except Exception:
                     with db:
                         db.execute('UPDATE notices SET summary_attempts=summary_attempts+1,next_send=? WHERE id=?', (now+interval, row['id']))
                     continue
-            elif not message.startswith(f"【未读提醒 R{row['id']}】"):
-                # Upgrade notices created before the explicit-id format without
-                # regenerating their model summary or losing the stored report.
-                message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读”确认当前未读提醒\n\n{message}"
+            else:
+                # Upgrade any cached notice created by an older template.
+                message = clean_notice_message(message)
                 with db:
                     db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
             occurrence = row['round']+1

@@ -28,7 +28,12 @@ def report_key(item):
 
 
 def fingerprint(item):
-    return hashlib.sha256(json.dumps([report_key(item), item["version"], item["updated_at"], item["content"]], ensure_ascii=False).encode()).hexdigest()
+    # updated_at can be rewritten by the source system during a read. Treat a
+    # version/content/status change as meaningful, while ignoring timestamp-only
+    # churn that would create a new reminder on every poll.
+    return hashlib.sha256(json.dumps([
+        report_key(item), item.get("version"), item.get("status"), item.get("content")
+    ], ensure_ascii=False).encode()).hexdigest()
 
 
 class DailyInspectionRunner:
