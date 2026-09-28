@@ -140,6 +140,12 @@ class AckInspectionRunner:
                     with db:
                         db.execute('UPDATE notices SET summary_attempts=summary_attempts+1,next_send=? WHERE id=?', (now+interval, row['id']))
                     continue
+            elif not message.startswith(f"【未读提醒 R{row['id']}】"):
+                # Upgrade notices created before the explicit-id format without
+                # regenerating their model summary or losing the stored report.
+                message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读 R{row['id']}”确认已读\n\n{message}"
+                with db:
+                    db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
             occurrence = row['round']+1
             # Claim before external I/O. Restart will wait for the next intentional
             # reminder occurrence, rather than replay an uncertain send immediately.
@@ -156,6 +162,8 @@ class AckInspectionRunner:
         if config.get('test_notify_each_check') and result['queried']:
             when = schedule.localize(now).strftime('%m-%d %H:%M:%S')
             message = f"【后台巡检测试】{when}\n查询完成：可见日报 {result['report_count']} 条，未读 {result['unread_count']} 条。\n未读正文按 {interval//60} 分钟间隔提醒；本条执行回执无需确认。"
+            if reports:
+                message += "\n\n" + "\n\n".join(format_report(report) for report in reports)
             try:
                 result['test_notice_channels'] = self.send(self.home, config, message, f"ack-check-{now}")
             except Exception as exc:
