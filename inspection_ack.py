@@ -133,7 +133,7 @@ class AckInspectionRunner:
                         raise ValueError('empty summary')
                     # Put the stable acknowledgement token in the first line so it
                     # remains visible even when a channel previews or truncates text.
-                    message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读 R{row['id']}”确认已读\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读 R{row['id']}”停止该条提醒；也可回复“全部已读”或“稍后提醒 R{row['id']}”。"
+                    message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读”确认当前未读提醒\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读”停止当前未读提醒；也可回复“已读 R{row['id']}”精确确认或“稍后提醒 R{row['id']}”。"
                     with db:
                         db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
                 except Exception:
@@ -143,7 +143,7 @@ class AckInspectionRunner:
             elif not message.startswith(f"【未读提醒 R{row['id']}】"):
                 # Upgrade notices created before the explicit-id format without
                 # regenerating their model summary or losing the stored report.
-                message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读 R{row['id']}”确认已读\n\n{message}"
+                message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读”确认当前未读提醒\n\n{message}"
                 with db:
                     db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
             occurrence = row['round']+1
@@ -209,8 +209,8 @@ def acknowledge(home, action, token, platform, clock=time.time):
             if row[0] != 'unread':
                 return f'{token} 已更新或不再可见，请确认最新提醒。'
             ids = [number]
-        elif action != '全部已读' and len(ids)>1:
-            return '有多条未读提醒，请回复“已读 R编号”或“全部已读”：'+ '、'.join(f'R{i}' for i in ids)
+        elif action not in {'已读', '确认已读', '看过了', '收到', '全部已读'} and len(ids)>1:
+            return '有多条未读提醒，请回复“已读”全部确认，或回复“已读 R编号”精确确认：'+ '、'.join(f'R{i}' for i in ids)
         if not ids:
             return '当前没有未读提醒。'
         now = clock()
@@ -260,7 +260,7 @@ async def command_handler(raw_args):
     context = TRUSTED.get()
     TRUSTED.set(None)
     if not context:
-        return '请在绑定的微信或 TG 私聊中回复“已读 R编号”。'
+        return '请在绑定的微信或 TG 私聊中回复“已读”。'
     try:
         return await asyncio.to_thread(acknowledge,*context)
     except Exception:

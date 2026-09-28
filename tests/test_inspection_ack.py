@@ -34,11 +34,10 @@ class AckTests(unittest.TestCase):
  def test_edit_gets_new_receipt(self):
   self.run_tick();self.ack();self.reports[0]['version']=2;self.run_tick(120)
   self.assertIn('提醒编号：R2',self.sent[-1][0]);self.assertEqual(self.models,2)
- def test_multi_requires_selection(self):
+ def test_plain_ack_clears_multiple(self):
   self.reports.append(dict(self.reports[0],department_code='sales'));self.run_tick()
-  self.assertIn('多条',self.ack());self.ack(token='R1');self.run_tick(180)
-  self.assertEqual(len(self.sent),3);self.assertIn('R2',self.sent[-1][0])
-  self.ack(action='全部已读');self.run_tick(180);self.assertEqual(len(self.sent),3)
+  self.assertIn('R1、R2',self.ack());self.run_tick(180)
+  self.assertEqual(len(self.sent),2)
  def test_snooze(self):
   self.run_tick();self.assertIn('30 分钟',self.ack(action='稍后提醒'));self.run_tick(180);self.assertEqual(len(self.sent),1)
   self.run_tick(1620);self.assertEqual(len(self.sent),2)
