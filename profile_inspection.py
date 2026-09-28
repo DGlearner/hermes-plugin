@@ -21,13 +21,14 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_MINUTES = 30
-ALLOWED_INTERVALS = frozenset({30, 60})
+ALLOWED_INTERVALS = frozenset({2, 5, 30, 60})
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 
 
 def query_profile_mcp(profile_home: Path, config: "InspectionConfig") -> dict[str, list[dict[str, Any]]]:
     """Query the two read-only MCP queues inside the active Profile scope."""
-    from . import DEFAULT_ENDPOINT, ENDPOINT_ENV, _call_mcp, _validate_endpoint, profile_scope
+    from . import DEFAULT_ENDPOINT, ENDPOINT_ENV, _call_mcp, _validate_endpoint
+    from .work_todos import profile_scope
     import os
 
     endpoint = _validate_endpoint(os.environ.get(ENDPOINT_ENV) or DEFAULT_ENDPOINT)
@@ -49,7 +50,7 @@ class InspectionConfig:
                  quiet_start: str | None = None, quiet_end: str | None = None,
                  tasks: bool = True, reviews: bool = True, max_items: int = 10):
         if interval_minutes not in ALLOWED_INTERVALS:
-            raise ValueError("interval_minutes must be 30 or 60")
+            raise ValueError("interval_minutes must be 2, 5, 30 or 60")
         self.enabled = bool(enabled)
         self.timezone = ZoneInfo(timezone)
         self.work_start = _parse_clock(work_start)

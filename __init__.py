@@ -3934,6 +3934,8 @@ def _employee_policy_prompt(_session_info: Any) -> str:
 
 
 def register(ctx) -> None:
+    from .inspection_ack import register_ack
+    register_ack(ctx)
     from .gateway_quiet import install_gateway_quiet
     install_gateway_quiet()
     from .weixin_delivery import install_weixin_delivery

@@ -467,7 +467,7 @@ profile_inspection:
   enabled: true
   timezone: Asia/Shanghai
   work_hours: {start: "09:00", end: "18:00"}
-  interval_minutes: 30 # 30 or 60
+  interval_minutes: 30 # 5 (pilot), 30 or 60
   quiet_hours: {enabled: false, start: "22:00", end: "08:00"}
   sources: {tasks: true, knowledge_reviews: true}
   notifications: {max_items: 10}
@@ -479,3 +479,71 @@ runner performs the MCP query and fingerprint comparison before invoking the
 model; unchanged checks therefore return without a model turn or outbound
 message. Quiet-time changes remain pending and are delivered after quiet time.
 The module also exposes `force=True` for a one-shot manual inspection.
+
+
+### crz daily-report pilot (2026-09-28)
+
+The operational pilot uses `daily_inspection.DailyInspectionRunner`, invoked
+by a native Hermes `no_agent` cron script. It is opt-in through the selected
+Profile's `inspection.json`; no plugin-register hook or background worker is
+installed. The scheduler ticks every minute; the runner queries every 5, 30 or
+60 minutes in 09:00–18:00 Asia/Shanghai. Unchanged checks emit the native
+`wakeAgent: false` gate and never construct an agent. When changes exist,
+Hermes `run_job` renders the shared Skill with the Profile's model, then the
+runner delivers once to the explicitly bound destination. It verifies Profile
+identity before querying and checks the route again before delivery.
+
+This pilot queries today's `list_daily_reports`, using report type, subject,
+and report date as the stable key and version/content fingerprint for changes.
+The API currently lacks pagination: snapshots reaching its 100-record limit
+fail closed rather than silently missing reports. It is not a history/event
+feed; changes between polls and reports outside today's date are not replayed.
+
+Durable state is stored in `inspection/state.sqlite3`, separate from older
+prototype task inspection state. A process lock prevents concurrent manual and
+scheduled runs. Pending batches are refreshed from authorized query results;
+quiet time defers delivery. Query failures back off, model failures stop after
+four attempts, and delivery with an unknown outcome is held as `uncertain`
+for operator review rather than blindly retried. Restarting cron preserves the
+ledger. Only `sent` batches advance the notified fingerprint. Status metadata
+without report bodies is available in `inspection/last_result.json`.
+
+Only crz is enrolled for the initial pilot, using its bound Telegram private
+chat. Other Profiles, templates and the existing daily task reminder are not
+modified. To disable, set `enabled: false` in `inspection.json` and pause the
+named cron job. Do not delete the ledger when pausing or restarting.
+
+Pilot interval update: crz uses `interval_minutes: 5` for the daily-report
+acceptance test. The default remains 30 minutes; only this Profile configuration
+was changed. Cron reads the configuration on each tick without a restart.
+
+crz testing now enables `test_notify_each_check: true` in `inspection.json`.
+Each actual query produces a fixed-text Telegram test receipt with execution
+ time, visible report count and change count; unchanged queries do not invoke
+ the model. Scheduler ticks that are not due produce no receipt. Query failures
+ produce a failure receipt. Quiet hours still suppress receipts. Receipt attempts
+ are persisted before sending and never retried on an uncertain outcome; they
+ do not modify business notification fingerprints. Disable this flag to restore
+ normal unchanged-check silence.
+
+crz now uses `notification_targets` for both its bound Telegram and Weixin
+routes. Both change notifications and test receipts are delivered to each.
+`notification_target` remains the backward-compatible single-target fallback.
+`inspection/deliveries.sqlite3` records each batch and destination separately;
+one channel failure does not prevent the other from being attempted. Successful
+or uncertain attempts are not blindly replayed. The sender revalidates Profile
+routing for each destination and Weixin also verifies the active binding.
+
+Test receipts now include the full current authorized report body with report
+ type, subject, date and author, including on unchanged checks. Bodies are taken
+ from the current query rather than historical notification batches. They are
+ removed from the returned status metadata before `last_result.json` is written.
+Long messages are split into numbered 1500-character parts without truncation;
+per-destination delivery records also deduplicate each part independently.
+The current crz pilot source remains daily reports, not task todos.
+
+Latest crz acceptance-test setting: `interval_minutes: 2` (previously 5).
+The default remains 30. Each report entry uses a numbered title, a blank line,
+flush-left date/author, a blank line, the body label and another blank line before
+the content. All content lines have leading whitespace removed for display;
+paragraph breaks are retained. Both Weixin and Telegram receive this layout.
