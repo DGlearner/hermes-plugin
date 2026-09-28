@@ -131,7 +131,9 @@ class AckInspectionRunner:
                     summary = self.summarize(self.home, [{'key': row['item_key'], 'fingerprint': row['fingerprint'], 'report': report}])
                     if not summary or summary.strip() == '[SILENT]':
                         raise ValueError('empty summary')
-                    message = f"提醒编号：R{row['id']}\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读 R{row['id']}”停止该条提醒；也可回复“全部已读”或“稍后提醒 R{row['id']}”。"
+                    # Put the stable acknowledgement token in the first line so it
+                    # remains visible even when a channel previews or truncates text.
+                    message = f"【未读提醒 R{row['id']}】\n提醒编号：R{row['id']}\n请回复“已读 R{row['id']}”确认已读\n\n{summary.strip()}\n\n{format_report(report)}\n\n回复“已读 R{row['id']}”停止该条提醒；也可回复“全部已读”或“稍后提醒 R{row['id']}”。"
                     with db:
                         db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
                 except Exception:

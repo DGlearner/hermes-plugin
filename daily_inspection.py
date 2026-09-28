@@ -264,7 +264,13 @@ def send_notification(home, config, message, batch_id):
                 try:
                     _send_notification_target(home, target, part, part_id)
                     status = "sent"
-                except Exception:
+                except Exception as exc:
+                    # Keep the user-facing outcome generic, but retain a safe
+                    # exception class for diagnosing channel-specific failures.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "profile inspection delivery uncertain platform=%s error=%s",
+                        platform, type(exc).__name__)
                     status = "uncertain"
                 with db:
                     db.execute("UPDATE deliveries SET state=? WHERE batch_id=? AND platform=? AND peer=?", (status, part_id, platform, peer))
