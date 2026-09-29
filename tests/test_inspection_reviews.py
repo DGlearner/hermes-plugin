@@ -30,3 +30,26 @@ class ReviewStateTests(AckTests):
   self.run_tick(180);self.assertEqual(len(self.sent),1)
   self.reports=[dict(review,version=2)];self.run_tick(180);self.assertEqual(len(self.sent),2)
   self.reports=[];self.run_tick(180);self.assertEqual(len(self.sent),2)
+
+ def test_mixed_batch_one_send_full_bodies_and_read(self):
+  self.reports += [dict(item_type='task',task_no='T1',title='Task',status='open',version=1,content='task original'),dict(item_type='review',document_id='D1',status='pending_review',version=1,content='文件：review.pdf')]
+  result=self.run_tick()
+  self.assertEqual(len(self.sent),1)
+  self.assertEqual(len(result['reminders']),3)
+  text=self.sent[0][0]
+  for body in ('正文：\n\ntest','task original','文件：review.pdf'):
+   self.assertEqual(text.count(body),1)
+  self.assertEqual(text.count('回复“已读”'),1)
+  self.ack();self.run_tick(180);self.assertEqual(len(self.sent),1)
+
+ def test_uncertain_batch_restart_waits_and_then_repeats_together(self):
+  self.reports += [dict(item_type='review',document_id='D1',status='pending_review',version=1,content='文件：review.pdf')]
+  def failed(*args):
+   self.sent.append(args)
+   raise TimeoutError()
+  self.runner.send=failed
+  self.run_tick();self.assertEqual(len(self.sent),1)
+  self.runner=type(self.runner)(self.home,self.query,self.model,self.send,lambda:self.now)
+  self.run_tick(60);self.assertEqual(len(self.sent),1)
+  self.run_tick(120);self.assertEqual(len(self.sent),2)
+  self.assertIn('review.pdf',self.sent[-1][0])

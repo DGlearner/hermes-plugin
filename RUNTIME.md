@@ -565,3 +565,10 @@ never approves/rejects a document. Removed reviews stop reminding. The endpoint
 has no pagination; a saturated 200-record result fails closed rather than treating
 an incomplete snapshot as complete. crz's legacy 09:00 job and dedicated script
 have been removed; its legacy interaction subscription remains disabled.
+
+Due notices from reports, tasks and knowledge reviews are combined into one
+notification per inspection tick and sent to each bound channel in that same
+chat. A single read-receipt footer follows all complete sections. Long text uses
+the existing numbered multipart delivery; it does not create another chat.
+All included notice occurrences are claimed in one transaction before sending;
+restart recovery and per-channel delivery deduplication apply to the batch.

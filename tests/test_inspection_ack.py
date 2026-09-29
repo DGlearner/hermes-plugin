@@ -37,7 +37,7 @@ class AckTests(unittest.TestCase):
  def test_plain_ack_clears_multiple(self):
   self.reports.append(dict(self.reports[0],department_code='sales'));self.run_tick()
   self.assertIn('R1、R2',self.ack());self.run_tick(180)
-  self.assertEqual(len(self.sent),2)
+  self.assertEqual(len(self.sent),1)
  def test_snooze(self):
   self.run_tick();self.assertIn('30 分钟',self.ack(action='稍后提醒'));self.run_tick(180);self.assertEqual(len(self.sent),1)
   self.run_tick(1620);self.assertEqual(len(self.sent),2)

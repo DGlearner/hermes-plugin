@@ -140,6 +140,7 @@ class AckInspectionRunner:
             result['status'] = 'quiet_deferred'
             return result
         emitted = []
+        selected = []
         for row in unread:
             if row['next_send'] > now:
                 continue
@@ -173,18 +174,24 @@ class AckInspectionRunner:
                 message = format_notice(json.loads(row['payload']))
                 with db:
                     db.execute('UPDATE notices SET message=? WHERE id=?', (message, row['id']))
-            occurrence = row['round']+1
-            # Claim before external I/O. Restart will wait for the next intentional
-            # reminder occurrence, rather than replay an uncertain send immediately.
+            selected.append((row, message))
+        if selected:
+            # Claim the entire batch before external I/O. A restart cannot replay
+            # only half of a batch, and the Profile lock serializes read receipts.
             with db:
-                db.execute('UPDATE notices SET round=?,next_send=?,sent_day=?,sent_today=? WHERE id=?', (occurrence, now+interval, day, row['sent_today']+1 if row['sent_day']==day else 1, row['id']))
+                for row, _ in selected:
+                    db.execute('UPDATE notices SET round=?,next_send=?,sent_day=?,sent_today=? WHERE id=?', (row['round']+1, now+interval, day, row['sent_today']+1 if row['sent_day']==day else 1, row['id']))
+            footer = '**回复“已读”停止当前提醒。**'
+            message = '\n\n'.join(text.removesuffix('\n\n'+footer) for _, text in selected) + '\n\n'+footer
+            batch = 'ack-batch-' + '-'.join(f"{row['id']}.{row['round']+1}" for row, _ in selected)
             try:
-                outcomes = self.send(self.home, config, message, f"ack-R{row['id']}-round-{occurrence}") or {'delivery':'sent'}
+                outcomes = self.send(self.home, config, message, batch) or {'delivery':'sent'}
             except Exception as exc:
                 outcomes = getattr(exc, 'outcomes', {'delivery':'uncertain'})
             with db:
-                db.execute('UPDATE notices SET last_outcomes=? WHERE id=?', (json.dumps(outcomes), row['id']))
-            emitted.append({'notice': f"R{row['id']}", 'channels': outcomes})
+                for row, _ in selected:
+                    db.execute('UPDATE notices SET last_outcomes=? WHERE id=?', (json.dumps(outcomes), row['id']))
+                    emitted.append({'notice': f"R{row['id']}", 'channels': outcomes})
         result['reminders'] = emitted
         if config.get('test_notify_each_check') and result['queried']:
             when = schedule.localize(now).strftime('%m-%d %H:%M:%S')

@@ -21,11 +21,11 @@ class TaskStateTests(AckTests):
  def test_old_task_survives_day_change_report_drops(self):
   task={'item_type':'task','task_no':'OLD','title':'Old task','status':'open','version':1,'content':'full task body'}
   self.reports.append(task);self.run_tick()
-  self.assertEqual(len(self.sent),2)
+  self.assertEqual(len(self.sent),1)
   self.reports=[task];self.run_tick(86400)
-  self.assertEqual(len(self.sent),3)
+  self.assertEqual(len(self.sent),2)
   self.assertIn('**待办提醒**',self.sent[-1][0])
-  self.ack();self.run_tick(180);self.assertEqual(len(self.sent),3)
+  self.ack();self.run_tick(180);self.assertEqual(len(self.sent),2)
   self.reports[0]=dict(task,status='in_progress',version=2)
-  self.run_tick(120);self.assertEqual(len(self.sent),4)
-  self.reports=[];self.run_tick(180);self.assertEqual(len(self.sent),4)
+  self.run_tick(120);self.assertEqual(len(self.sent),3)
+  self.reports=[];self.run_tick(180);self.assertEqual(len(self.sent),3)
