@@ -30,7 +30,7 @@ def clean_notice_message(message):
 
 def format_notice(report):
     """Render one canonical report body without a duplicate model summary."""
-    title = "待办提醒" if report.get("item_type") == "task" else "日报提醒"
+    title = {"task": "待办提醒", "review": "入库文件审核提醒"}.get(report.get("item_type"), "日报提醒")
     return f"**{title}**\n\n{format_report(report)}\n\n**回复“已读”停止当前提醒。**"
 
 
@@ -38,6 +38,8 @@ def format_report(report):
     if report.get('item_type') == 'task':
         status = {'open': '待开始', 'in_progress': '进行中', 'pending_review': '待审核'}.get(report['status'], report['status'])
         return f"{report['title']}\n\n任务：{report['task_no']}｜状态：{status}\n截止时间：{report.get('due_at') or '未设置'}\n\n正文：\n\n{report['content']}"
+    if report.get("item_type") == "review":
+        return report["content"] + "\n\n确认已读仅停止提醒，不代表批准入库。"
     kind = report['report_type']
     subject = (report.get('employee_display_name') or report.get('employee_username')) if kind == 'personal' else (report.get('department_name') or report.get('department_code')) if kind == 'department' else '公司'
     author = report.get('author_display_name') or report.get('author_username') or '未提供'
@@ -127,7 +129,7 @@ class AckInspectionRunner:
                 put_meta(db, 'query_ok', 1)
                 put_meta(db, 'query_failures', 0)
                 put_meta(db, 'query_retry_at', 0)
-            result = {'status': 'checked', 'queried': True, 'report_count': sum(r.get('item_type') != 'task' for r in reports), 'task_count': sum(r.get('item_type') == 'task' for r in reports), 'checked_at': now}
+            result = {'status': 'checked', 'queried': True, 'report_count': sum(r.get('item_type') not in {'task', 'review'} for r in reports), 'task_count': sum(r.get('item_type') == 'task' for r in reports), 'review_count': sum(r.get('item_type') == 'review' for r in reports), 'checked_at': now}
         # Never repeat cached data after a failed query or beyond one polling interval.
         last = get_meta(db, 'last_checked_at')
         if get_meta(db, 'query_ok') != '1' or not last or now-float(last) > schedule.interval_minutes*60:

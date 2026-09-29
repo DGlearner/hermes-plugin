@@ -20,6 +20,10 @@ class UncertainDelivery(Exception):
 
 
 def report_key(item):
+    if item.get("item_type") == "review":
+        if not item.get("document_id"):
+            raise ValueError("missing review identity")
+        return json.dumps(["review", item["document_id"]])
     if item.get("item_type") == "task":
         if not item.get("task_no"):
             raise ValueError("missing task identity")
@@ -32,6 +36,8 @@ def report_key(item):
 
 
 def fingerprint(item):
+    if item.get("item_type") == "review":
+        return hashlib.sha256(json.dumps([report_key(item), item.get("version"), item.get("status"), item.get("review_requested_at"), item.get("content")], ensure_ascii=False).encode()).hexdigest()
     if item.get("item_type") == "task":
         return hashlib.sha256(json.dumps([report_key(item), item.get("version"), item.get("status"), item.get("title"), item.get("due_at"), item.get("content")], ensure_ascii=False).encode()).hexdigest()
     # updated_at can be rewritten by the source system during a read. Treat a
@@ -218,7 +224,37 @@ def query_reports(home, config, day):
             raise ValueError("unexpected report date")
         if config.get("include_tasks", False):
             reports = reports + query_all_tasks(call)
+        if config.get("include_reviews", False):
+            reports = reports + query_pending_reviews(call, user)
         return reports
+
+
+def query_pending_reviews(call, user=None):
+    """Use the server's reviewer ACL; never infer permissions from cached data."""
+    if user is not None and not (
+        user.get("organization_role") in {"department_manager", "company_leader"}
+        or "knowledge_admin" in (user.get("system_roles") or [])
+    ):
+        return []
+    result = call("list_pending_knowledge_reviews", {"limit": 200})
+    reviews = result.get("reviews")
+    # This endpoint has no offset/total. A full page cannot establish a complete
+    # snapshot, so fail closed instead of retiring unseen notices.
+    if not isinstance(reviews, list) or result.get("count") != len(reviews) or len(reviews) >= 200:
+        raise ValueError("incomplete review snapshot")
+    items, seen = [], set()
+    for review in reviews:
+        key = review.get("document_id")
+        if not key or key in seen or review.get("status") != "pending_review":
+            raise ValueError("invalid review record")
+        seen.add(key)
+        body = (f"文件：{review['file_name']}\n标题：{review['title']}"
+                f"\n提交人：{review.get('uploaded_by_display_name') or review.get('uploaded_by_username') or '未提供'}"
+                f"\n归属部门：{review.get('steward_department_name') or '未提供'}"
+                f"\n申请时间：{review.get('review_requested_at') or '未提供'}"
+                f"\n版本：{review['version']}\n状态：待审核")
+        items.append(dict(review, item_type="review", content=body))
+    return items
 
 
 def query_all_tasks(call):

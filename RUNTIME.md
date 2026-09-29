@@ -555,3 +555,13 @@ requirements. Open, in-progress and pending-review tasks share the durable read
 receipt ledger; completed, cancelled or no-longer-visible tasks stop reminding.
 An incomplete task snapshot fails closed. The legacy 09:00 work-todos job and
 first-interaction subscription are paused for crz to avoid duplicate delivery.
+
+`include_reviews: true` adds the caller's `list_pending_knowledge_reviews`
+queue (no date filter). Current identity must have department_manager,
+company_leader or knowledge_admin authority; ordinary employees skip this source.
+Server ACLs remain authoritative. Review identity is document_id, with version,
+status and review_requested_at tracking revisions/resubmissions. Read confirmation
+never approves/rejects a document. Removed reviews stop reminding. The endpoint
+has no pagination; a saturated 200-record result fails closed rather than treating
+an incomplete snapshot as complete. crz's legacy 09:00 job and dedicated script
+have been removed; its legacy interaction subscription remains disabled.
