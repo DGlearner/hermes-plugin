@@ -20,6 +20,10 @@ class UncertainDelivery(Exception):
 
 
 def report_key(item):
+    if item.get("item_type") == "task":
+        if not item.get("task_no"):
+            raise ValueError("missing task identity")
+        return json.dumps(["task", item["task_no"]])
     kind = item["report_type"]
     subject = item.get("employee_username") if kind == "personal" else item.get("department_code") if kind == "department" else "company"
     if kind not in {"personal", "department", "company"} or not subject or not item.get("report_date"):
@@ -28,6 +32,8 @@ def report_key(item):
 
 
 def fingerprint(item):
+    if item.get("item_type") == "task":
+        return hashlib.sha256(json.dumps([report_key(item), item.get("version"), item.get("status"), item.get("title"), item.get("due_at"), item.get("content")], ensure_ascii=False).encode()).hexdigest()
     # updated_at can be rewritten by the source system during a read. Treat a
     # version/content/status change as meaningful, while ignoring timestamp-only
     # churn that would create a new reminder on every poll.
@@ -210,7 +216,50 @@ def query_reports(home, config, day):
             raise ValueError("incomplete report snapshot")
         if any(r.get("report_date") != day for r in reports):
             raise ValueError("unexpected report date")
+        if config.get("include_tasks", False):
+            reports = reports + query_all_tasks(call)
         return reports
+
+
+def query_all_tasks(call):
+    """Read every page under the current employee identity, without a date filter."""
+    tasks = {}
+    offset = 0
+    total_expected = None
+    for _ in range(1000):
+        page = call("list_my_tasks", {"limit": 100, "offset": offset})
+        rows, total = page.get("tasks"), page.get("total")
+        if not isinstance(rows, list) or type(total) is not int or total < 0:
+            raise ValueError("invalid task page")
+        if total_expected is not None and total != total_expected:
+            raise ValueError("task snapshot changed during pagination")
+        total_expected = total
+        for task in rows:
+            key = task.get("task_no")
+            if not key or key in tasks:
+                raise ValueError("invalid or overlapping task page")
+            tasks[key] = task
+        offset += len(rows)
+        if offset == total:
+            break
+        if not rows or offset > total:
+            raise ValueError("incomplete task snapshot")
+    else:
+        raise ValueError("task pagination limit")
+    results = []
+    for key, task in tasks.items():
+        if task.get("status") not in {"open", "in_progress", "pending_review"}:
+            continue
+        detail = call("get_task", {"task_no": key})
+        if detail.get("task_no") != key or not isinstance(detail.get("instructions"), str):
+            raise ValueError("invalid task detail")
+        if detail.get("status") not in {"open", "in_progress", "pending_review"}:
+            continue
+        body = detail["instructions"]
+        if detail.get("expected_submission"):
+            body += "\n\n提交要求：\n" + detail["expected_submission"]
+        results.append(dict(detail, item_type="task", content=body))
+    return results
 
 
 def summarize_reports(home, changes):

@@ -547,3 +547,11 @@ The default remains 30. Each report entry uses a numbered title, a blank line,
 flush-left date/author, a blank line, the body label and another blank line before
 the content. All content lines have leading whitespace removed for display;
 paragraph breaks are retained. Both Weixin and Telegram receive this layout.
+
+The crz unified inspection pilot enables `include_tasks: true`: daily reports
+remain restricted to today's Profile-local date, while `list_my_tasks` is paged
+without a date filter and `get_task` supplies full instructions and submission
+requirements. Open, in-progress and pending-review tasks share the durable read
+receipt ledger; completed, cancelled or no-longer-visible tasks stop reminding.
+An incomplete task snapshot fails closed. The legacy 09:00 work-todos job and
+first-interaction subscription are paused for crz to avoid duplicate delivery.
