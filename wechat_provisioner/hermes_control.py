@@ -233,7 +233,16 @@ class InstalledHermesControl:
                     "username": request.username,
                 },
             )
+        self.sync_inspections(self._read_gateway_config())
         return created
+
+    def sync_inspections(self, config: dict) -> None:
+        if not (self._profile_home(self._template) / 'inspection-defaults.json').exists():
+            return
+        from plugins.profile_rag_mcp.inspection_enrollment import sync_all
+
+        sync_all(self._home, self._template,
+                 config.get('gateway', {}).get('profile_routes', []))
 
     def install_profile_weixin_credentials(
         self,
@@ -353,7 +362,8 @@ class InstalledHermesControl:
 
     def remove_profile_pat(self, profile_name: str) -> None:
         from .telegram import telegram_routes
-        if any(r.get("profile") == profile_name for r in telegram_routes(self)):
+        from .wecom import wecom_routes
+        if any(r.get("profile") == profile_name for r in telegram_routes(self) + wecom_routes(self)):
             return  # The credential belongs to the employee, not to Weixin alone.
         profile_home = self._profile_home(profile_name)
         if not profile_home.exists():
@@ -566,6 +576,7 @@ class InstalledHermesControl:
         platform_toolsets = self._mapping_copy(source_config.get("platform_toolsets"))
         platform_toolsets["weixin"] = list(EMPLOYEE_WEIXIN_TOOLSETS)
         platform_toolsets["telegram"] = list(EMPLOYEE_WEIXIN_TOOLSETS)
+        platform_toolsets["wecom_callback"] = list(EMPLOYEE_WEIXIN_TOOLSETS)
         target["platform_toolsets"] = platform_toolsets
         skills = self._mapping_copy(target.get("skills"))
         skills.update(external_dirs=[], trusted_project_dirs=[], write_approval=False)
@@ -575,10 +586,12 @@ class InstalledHermesControl:
         known_builtin = self._mapping_copy(source_config.get("known_builtin_toolsets"))
         known_builtin["weixin"] = sorted(builtin_toolsets)
         known_builtin["telegram"] = sorted(builtin_toolsets)
+        known_builtin["wecom_callback"] = sorted(builtin_toolsets)
         target["known_builtin_toolsets"] = known_builtin
         known_plugins = self._mapping_copy(source_config.get("known_plugin_toolsets"))
         known_plugins["weixin"] = sorted(plugin_toolsets)
         known_plugins["telegram"] = sorted(plugin_toolsets)
+        known_plugins["wecom_callback"] = sorted(plugin_toolsets)
         target["known_plugin_toolsets"] = known_plugins
 
         target["session_reset"] = dict(SESSION_RESET_POLICY)
@@ -799,6 +812,9 @@ class InstalledHermesControl:
             except FileNotFoundError:
                 pass
             raise
+        # Both Weixin and Telegram binding/unbinding converge independent
+        # inspection targets after the authoritative route file is persisted.
+        self.sync_inspections(config)
 
     @staticmethod
     def _route_name(binding_id: UUID) -> str:

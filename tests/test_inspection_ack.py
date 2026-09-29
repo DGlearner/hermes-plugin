@@ -24,7 +24,7 @@ class AckTests(unittest.TestCase):
  def test_independent_two_and_three_minutes(self):
   self.run_tick();self.run_tick(60);self.run_tick(60);self.run_tick(60)
   self.assertEqual(self.queries,2);self.assertEqual(self.models,1);self.assertEqual(len(self.sent),2)
-  self.assertIn('**日报提醒**',self.sent[0][0]);self.assertIn('**回复“已读”停止当前提醒。**',self.sent[0][0]);self.assertNotIn('R1',self.sent[0][0]);self.assertIn('正文：\n\ntest',self.sent[0][0])
+  self.assertIn('**日报提醒**',self.sent[0][0]);self.assertIn('**回复“已读 R编号”确认单项；回复“全部已读”或“已读”确认全部。**',self.sent[0][0]);self.assertIn('[R1]',self.sent[0][0]);self.assertIn('正文：\n\ntest',self.sent[0][0])
  def test_ack_stops_both_channels_but_queries_continue(self):
   self.run_tick();self.assertIn('已确认',self.ack())
   self.run_tick(180);self.assertEqual(len(self.sent),1);self.assertEqual(self.queries,2)
@@ -33,11 +33,37 @@ class AckTests(unittest.TestCase):
   self.run_tick(180);self.assertEqual(len(self.sent),1);self.assertIn('已确认',self.ack(token='R1'))
  def test_edit_gets_new_receipt(self):
   self.run_tick();self.ack();self.reports[0]['version']=2;self.run_tick(120);self.run_tick(60)
-  self.assertIn('**日报提醒**',self.sent[-1][0]);self.assertIn('**回复“已读”停止当前提醒。**',self.sent[-1][0]);self.assertNotIn('R2',self.sent[-1][0]);self.assertEqual(self.models,2)
+  self.assertIn('**日报提醒**',self.sent[-1][0]);self.assertIn('**回复“已读 R编号”确认单项；回复“全部已读”或“已读”确认全部。**',self.sent[-1][0]);self.assertIn('[R2]',self.sent[-1][0]);self.assertEqual(self.models,2)
  def test_plain_ack_clears_multiple(self):
   self.reports.append(dict(self.reports[0],department_code='sales'));self.run_tick()
   self.assertIn('R1、R2',self.ack());self.run_tick(180)
   self.assertEqual(len(self.sent),1)
+ def test_manual_reminder_requeries_and_only_sends_unread(self):
+  self.reports.append(dict(self.reports[0],department_code='sales'))
+  self.run_tick();self.ack(token='R1');self.now+=10
+  self.runner.run(self.cfg,remind_now=True)
+  self.assertEqual(self.queries,2);self.assertEqual(len(self.sent),2)
+  self.assertNotIn('[R1]',self.sent[-1][0]);self.assertIn('[R2]',self.sent[-1][0])
+  self.run_tick(60);self.assertEqual(len(self.sent),2)
+  self.ack();self.runner.run(self.cfg,remind_now=True)
+  self.assertEqual(len(self.sent),2)
+ def test_visible_ids_stable_and_single_ack_survives_restart(self):
+  self.reports.append(dict(self.reports[0],department_code='sales'))
+  self.run_tick()
+  self.assertIn('[R1]',self.sent[-1][0]);self.assertIn('[R2]',self.sent[-1][0])
+  self.run_tick(180)
+  self.assertIn('[R1]',self.sent[-1][0]);self.assertIn('[R2]',self.sent[-1][0])
+  self.ack(token='R1',platform='weixin')
+  self.runner=type(self.runner)(self.home,self.query,self.model,self.send,lambda:self.now)
+  self.run_tick(180)
+  self.assertNotIn('[R1]',self.sent[-1][0]);self.assertIn('[R2]',self.sent[-1][0])
+  self.ack(action='全部已读',platform='telegram');count=len(self.sent)
+  self.run_tick(180);self.assertEqual(len(self.sent),count)
+ def test_quote_cannot_override_explicit_read_scope(self):
+  quote='提醒编号：R1\n提醒编号：R2\n[R3]'
+  self.assertEqual(parse_command('已读',quote),('已读',None))
+  self.assertEqual(parse_command('已读 R2',quote),('已读','R2'))
+  self.assertEqual(parse_command('全部已读',quote),('全部已读',None))
  def test_snooze(self):
   self.run_tick();self.assertIn('30 分钟',self.ack(action='稍后提醒'));self.run_tick(180);self.assertEqual(len(self.sent),1)
   self.run_tick(1620);self.assertEqual(len(self.sent),2)
@@ -53,7 +79,7 @@ class AckTests(unittest.TestCase):
   self.cfg['acknowledgement']['max_reminders_per_day']=1;self.run_tick(180);self.assertEqual(len(self.sent),1)
   self.now=datetime.fromisoformat('2026-09-28T18:00:00+08:00').timestamp();self.assertEqual(self.run_tick()['status'],'outside_work_hours')
  def test_parse_exact_commands_and_quote(self):
-  self.assertEqual(parse_command('已读','提醒编号：R12'),('已读','R12'))
+  self.assertEqual(parse_command('已读','提醒编号：R12'),('已读',None))
   self.assertEqual(parse_command('收到 R2'),('收到','R2'))
   self.assertIsNone(parse_command('帮我查询已读日报'))
   self.assertEqual(parse_command('全部已读'),('全部已读',None))

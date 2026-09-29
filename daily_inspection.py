@@ -8,6 +8,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -37,7 +38,10 @@ def report_key(item):
 
 def fingerprint(item):
     if item.get("item_type") == "review":
-        return hashlib.sha256(json.dumps([report_key(item), item.get("version"), item.get("status"), item.get("review_requested_at"), item.get("content")], ensure_ascii=False).encode()).hexdigest()
+        # Download URLs are intentionally short-lived and refreshed on every
+        # poll; they must never make an unchanged file a new notice.
+        content = re.sub(r"\n下载：.*$", "", str(item.get("content") or ""), flags=re.S)
+        return hashlib.sha256(json.dumps([report_key(item), item.get("version"), item.get("status"), item.get("review_requested_at"), content], ensure_ascii=False).encode()).hexdigest()
     if item.get("item_type") == "task":
         return hashlib.sha256(json.dumps([report_key(item), item.get("version"), item.get("status"), item.get("title"), item.get("due_at"), item.get("content")], ensure_ascii=False).encode()).hexdigest()
     # updated_at can be rewritten by the source system during a read. Treat a
@@ -248,12 +252,25 @@ def query_pending_reviews(call, user=None):
         if not key or key in seen or review.get("status") != "pending_review":
             raise ValueError("invalid review record")
         seen.add(key)
+        # Prepare a short-lived URL under the current Profile's PAT scope. The
+        # server rechecks reviewer/download ACLs and the URL is never persisted
+        # outside the Profile inspection ledger.
+        download_url = None
+        try:
+            prepared = call("prepare_knowledge_download", {"document_id": key})
+            download_url = prepared.get("download_url") if isinstance(prepared, dict) else None
+        except Exception:
+            # A notification remains useful when a temporary signing service is
+            # unavailable; the next polling cycle retries URL preparation.
+            download_url = None
         body = (f"文件：{review['file_name']}\n标题：{review['title']}"
                 f"\n提交人：{review.get('uploaded_by_display_name') or review.get('uploaded_by_username') or '未提供'}"
                 f"\n归属部门：{review.get('steward_department_name') or '未提供'}"
                 f"\n申请时间：{review.get('review_requested_at') or '未提供'}"
                 f"\n版本：{review['version']}\n状态：待审核")
-        items.append(dict(review, item_type="review", content=body))
+        if isinstance(download_url, str) and download_url.startswith(('https://', 'http://')):
+            body += f"\n下载：[{review['file_name']}]({download_url})"
+        items.append(dict(review, item_type="review", content=body, download_url=download_url))
     return items
 
 
@@ -340,7 +357,7 @@ def send_notification(home, config, message, batch_id):
     targets = config.get("notification_targets") or [config["notification_target"]]
     unique = {}
     for target in targets:
-        if target.get("platform") not in {"telegram", "weixin"} or not target.get("chat_id"):
+        if target.get("platform") not in {"telegram", "weixin", "wecom_callback"} or not target.get("chat_id"):
             raise ValueError("invalid notification target")
         unique[(target["platform"], str(target["chat_id"]))] = target
     directory = home / "inspection"
@@ -393,6 +410,9 @@ def _send_notification_target(home, target, message, batch_id):
     if target["platform"] == "weixin":
         binding=active_binding(root,home.name,target["chat_id"])
         send_report(root,{"profile":home.name,"peer":target["chat_id"],"id":batch_id,"binding_identity":binding_identity(binding)},message)
+    elif target["platform"] == "wecom_callback":
+        from .wecom_binding import send_notification as send_wecom
+        send_wecom(root, target, message)
     elif target["platform"] == "telegram":
         from cron.scheduler import _deliver_result
         with profile_scope(root):

@@ -586,3 +586,31 @@ The transport preserves these prepared pages and per-page/channel deduplication.
 The crz pilot uses one scheduler job and one two-minute query watermark for all
 three sources (today reports, all outstanding tasks, authorized review queue).
 Queries run within the same Profile scope in one cycle, not as separate jobs.
+
+Each item now displays its persisted ledger token, for example `[R79]`.
+Repeated reminders keep that token; a new content fingerprint receives a new
+token. `已读 R79` confirms only that item version across Weixin and Telegram.
+`全部已读` and bare `已读` confirm all current unread items in the Profile,
+even when replying to a quoted message. Quoted tokens do not narrow a read
+command; the user must explicitly type the token to select one item.
+Tokens and instructions count toward the whole-item page budget. Review times
+are displayed in UTC+8, with uploader and department on the same field.
+
+Employee inspection enrollment is enabled by installing
+`employee-template/inspection-defaults.json` with
+`python scripts/sync_employee_inspection.py` inside Hermes. The template holds
+neutral defaults, the entry script and the existing Skill; it has a disabled
+inspection config and no inspection cron job or employee ledger. Defaults are
+09:00–18:00 Asia/Shanghai, 30-minute queries and 30-minute unread reminders.
+The installer converges managed employee Profiles using their identity markers
+and current private Weixin/TG routes, never another employee's credentials or
+state. Existing frequencies, quiet times and opt-outs are preserved (including
+the crz 2-minute query / 3-minute reminder pilot).
+
+After rollout, the provisioner's employee initialization and route-write paths
+reconcile inspection configs and one no-agent cron per employee. Profiles with
+no bound channel receive a paused job and resume on binding, unless opted out.
+Unbinding removes the obsolete target; removing the last target pauses the job.
+Both channels share the employee's independent persisted read receipts.
+The built-in default Profile and unmanaged test Profiles are not employees and
+are not enrolled automatically. Re-run the installer for idempotent convergence.

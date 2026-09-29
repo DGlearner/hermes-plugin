@@ -21,6 +21,7 @@ from .qr_login import WechatQrLoginService
 from .service import ProvisioningError, WechatProvisioningService
 from .settings import ProvisionerSettings
 from .telegram import TelegramBindings, TelegramRequest
+from .wecom import WecomBindings, WecomRequest, WecomCallbackRequest, wecom_routes
 from .state import BindingStateStore
 
 
@@ -118,5 +119,33 @@ def create_app(
         if operation not in {"status", "start", "poll", "revoke"}:
             raise HTTPException(status_code=404)
         return await asyncio.to_thread(getattr(telegram, operation), body)
+
+    wecom = WecomBindings(control)
+
+    @app.post('/v1/wecom-callback', dependencies=[Depends(require_token)])
+    async def wecom_callback(body: WecomCallbackRequest):
+        import httpx
+        if not wecom.settings().get('enabled'):
+            raise HTTPException(status_code=503, detail='WeCom not configured')
+        if set(body.query) - {'msg_signature', 'timestamp', 'nonce', 'echostr'} or any(len(v) > 8192 for v in body.query.values()):
+            raise HTTPException(status_code=400, detail='Invalid callback')
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                response = await client.request(body.method, 'http://127.0.0.1:8645/wecom/callback',
+                    params=body.query, content=body.body.encode('utf-8'), headers={'Content-Type':'application/xml'})
+            return {'status_code': response.status_code, 'body': response.text[:65536]}
+        except httpx.HTTPError:
+            raise HTTPException(status_code=503, detail='WeCom callback unavailable') from None
+
+    @app.post('/v1/wecom-employees', dependencies=[Depends(require_token)])
+    async def wecom_employees():
+        return {'employee_ids': [r['profile'][9:] for r in wecom_routes(control)
+                                 if r.get('profile', '').startswith('employee-')]}
+
+    @app.post('/v1/wecom/{operation}', dependencies=[Depends(require_token)])
+    async def wecom_binding(operation: str, body: WecomRequest):
+        if operation not in {'status', 'start', 'poll', 'revoke'}:
+            raise HTTPException(status_code=404)
+        return await asyncio.to_thread(getattr(wecom, operation), body)
 
     return app

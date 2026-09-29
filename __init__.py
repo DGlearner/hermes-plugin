@@ -3953,6 +3953,8 @@ def register(ctx) -> None:
     from .telegram_binding import install_telegram_binding
 
     install_telegram_binding()
+    from .wecom_binding import install_wecom_binding
+    install_wecom_binding()
     from .employee_models import install_employee_models
 
     install_employee_models()

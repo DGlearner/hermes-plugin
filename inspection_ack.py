@@ -9,7 +9,9 @@ import re
 import sqlite3
 import time
 from contextvars import ContextVar
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .profile_inspection import InspectionConfig
 from .daily_inspection import fingerprint, report_key, ItemNotification
@@ -32,50 +34,84 @@ def format_notice(report):
     return format_batch([report])
 
 
-def _render_page(reports):
+def _render_page(reports, *, flush_left=False):
     groups = {}
     for report in reports:
         kind = report.get('item_type', 'report')
-        groups.setdefault(kind, []).append(format_report(report))
+        body = format_report(report)
+        if flush_left:
+            # Keep visible numbering without triggering Markdown list indentation.
+            lines = []
+            for line in body.splitlines():
+                line = line.lstrip()
+                line = re.sub(r'^(\d+)[.)](?=\s)', r'\1．', line)
+                line = re.sub(r'^[-+*](?=\s)', '•', line)
+                line = re.sub(r'^>(?=\s|$)', '＞', line)
+                lines.append(line)
+            body = '\n'.join(lines)
+        if report.get('_notice_id') is not None:
+            body = f"[R{report['_notice_id']}]\n" + body
+        groups.setdefault(kind, []).append(body)
     titles = {'report': '日报提醒', 'task': '待办提醒', 'review': '文件审核提醒'}
     sections = [f"**{titles[kind]}**\n\n" + '\n\n'.join(groups[kind])
                 for kind in ('report', 'task', 'review') if kind in groups]
     if 'review' in groups:
         sections.append('确认已读仅停止提醒，不代表批准入库。')
-    return '\n\n'.join(sections) + '\n\n**回复“已读”停止当前提醒。**'
+    return '\n\n'.join(sections) + '\n\n**回复“已读 R编号”确认单项；回复“全部已读”或“已读”确认全部。**'
 
 
-def format_batch(reports, limit=1500):
+def format_batch(reports, limit=1500, *, notice_ids=None, byte_limit=None, flush_left=False):
     """Pack complete items, counting headings/footer in the soft page limit.
 
     A single oversized item occupies its own page without loss or slicing.
     ItemNotification prevents the transport from slicing these pages again.
     """
+    # IDs come only from the local ledger, never from MCP content or position.
+    if notice_ids is not None and len(notice_ids) != len(reports):
+        raise ValueError('notice ids must match items')
+    reports = [dict(r, _notice_id=notice_ids[i] if notice_ids is not None else None)
+               for i, r in enumerate(reports)]
     ordered = [r for kind in ('report', 'task', 'review') for r in reports
                if r.get('item_type', 'report') == kind]
     pages, current = [], []
     for report in ordered:
-        if current and len(_render_page(current + [report])) > limit:
-            pages.append(_render_page(current))
+        candidate = _render_page(current + [report], flush_left=flush_left)
+        if current and (len(candidate) > limit or (byte_limit and len(candidate.encode('utf-8')) > byte_limit)):
+            pages.append(_render_page(current, flush_left=flush_left))
             current = []
         current.append(report)
     if current:
-        pages.append(_render_page(current))
+        pages.append(_render_page(current, flush_left=flush_left))
     return ItemNotification(pages)
 
 
 def format_report(report):
     if report.get('item_type') == 'task':
         status = {'open': '待开始', 'in_progress': '进行中', 'pending_review': '待审核'}.get(report['status'], report['status'])
-        return f"{report['title']}\n\n任务：{report['task_no']}｜状态：{status}\n截止时间：{report.get('due_at') or '未设置'}\n\n正文：\n\n{report['content']}"
+        return f"{report['title']}\n\n任务：{report['task_no']}\n\n状态：{status}\n\n截止时间：{report.get('due_at') or '未设置'}\n\n正文：\n\n{report['content']}"
     if report.get("item_type") == "review":
-        return "\n".join(line.strip() for line in report["content"].splitlines())
+        if 'file_name' not in report:
+            return "\n\n".join(line.strip() for line in report['content'].splitlines() if line.strip())
+        requested = report.get('review_requested_at') or '未提供'
+        try:
+            timestamp = datetime.fromisoformat(requested.replace('Z', '+00:00'))
+            if timestamp.tzinfo is not None:
+                requested = timestamp.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S') + '（UTC+8）'
+        except ValueError:
+            pass
+        author = report.get('uploaded_by_display_name') or report.get('uploaded_by_username') or '未提供'
+        department = report.get('steward_department_name') or '未提供'
+        download = report.get('download_url')
+        download_line = f"\n\n下载：[点击下载]({download})" if isinstance(download, str) and download.startswith(('https://', 'http://')) else ''
+        return (f"文件：{report['file_name']}\n\n标题：{report['title']}"
+                f"\n\n提交人：{author}（{department}）\n\n申请时间：{requested}"
+                f"\n\n版本：{report['version']}" + download_line)
     kind = report['report_type']
     subject = (report.get('employee_display_name') or report.get('employee_username')) if kind == 'personal' else (report.get('department_name') or report.get('department_code')) if kind == 'department' else '公司'
     author = report.get('author_display_name') or report.get('author_username') or '未提供'
     title = {'personal': '个人日报', 'department': '部门日报', 'company': '公司日报'}[kind]
     body = '\n'.join(line.lstrip() for line in report['content'].split('\n'))
-    return f"1. {title}｜{subject}\n\n日期：{report['report_date']}｜发布人：{author}\n\n正文：\n\n{body}"
+    return f"{title}｜{subject}\n\n日期：{report['report_date']}｜发布人：{author}\n\n正文：\n\n{body}"
 
 
 @contextlib.contextmanager
@@ -114,16 +150,16 @@ class AckInspectionRunner:
         self.home = Path(home)
         self.query, self.summarize, self.send, self.clock = query, summarize, send, clock
 
-    def run(self, config, *, force=False):
+    def run(self, config, *, force=False, remind_now=False):
         if not config.get('enabled') or not config.get('acknowledgement', {}).get('enabled'):
             return {'status': 'disabled'}
         try:
             with ledger(self.home, blocking=False) as db:
-                return self._tick(db, config, force)
+                return self._tick(db, config, force or remind_now, remind_now)
         except BlockingIOError:
             return {'status': 'busy'}
 
-    def _tick(self, db, config, force):
+    def _tick(self, db, config, force, remind_now=False):
         now = self.clock()
         schedule = InspectionConfig.from_mapping(config)
         if not schedule.in_work_hours(now):
@@ -155,6 +191,9 @@ class AckInspectionRunner:
                         db.execute("UPDATE notices SET state='superseded' WHERE id=?", (row['id'],))
                 for (key, fp), report in current.items():
                     db.execute("INSERT OR IGNORE INTO notices(item_key,fingerprint,payload,state) VALUES (?,?,?,'unread')", (key, fp, json.dumps(report, ensure_ascii=False)))
+                    # Refresh short-lived review URLs on every successful poll
+                    # without changing the durable notice fingerprint/state.
+                    db.execute("UPDATE notices SET payload=? WHERE item_key=? AND fingerprint=? AND state='unread'", (json.dumps(report, ensure_ascii=False), key, fp))
                 put_meta(db, 'last_checked_at', now)
                 put_meta(db, 'query_ok', 1)
                 put_meta(db, 'query_failures', 0)
@@ -171,13 +210,13 @@ class AckInspectionRunner:
             return result
         # One Profile-wide cadence coalesces notices whose individual deadlines
         # differ. Newly found items wait at most one reminder interval.
-        if float(get_meta(db, 'batch_next_send', 0)) > now:
+        if not remind_now and float(get_meta(db, 'batch_next_send', 0)) > now:
             result['reminders'] = []
             return result
         emitted = []
         selected = []
         for row in unread:
-            if row['next_send'] > now:
+            if not remind_now and row['next_send'] > now:
                 continue
             cap = ack.get('max_reminders_per_day', 3)
             if cap is not None and row['sent_day'] == day and row['sent_today'] >= int(cap):
@@ -217,7 +256,10 @@ class AckInspectionRunner:
                 put_meta(db, 'batch_next_send', now+interval)
                 for row, _ in selected:
                     db.execute('UPDATE notices SET round=?,next_send=?,sent_day=?,sent_today=? WHERE id=?', (row['round']+1, now+interval, day, row['sent_today']+1 if row['sent_day']==day else 1, row['id']))
-            message = format_batch([json.loads(row['payload']) for row, _ in selected])
+            message = format_batch([json.loads(row['payload']) for row, _ in selected],
+                                   notice_ids=[row['id'] for row, _ in selected],
+                                   flush_left=any(t.get('platform') == 'wecom_callback' for t in config.get('notification_targets', [])),
+                                   byte_limit=4000 if any(t.get('platform') == 'wecom_callback' for t in config.get('notification_targets', [])) else None)
             batch = 'ack-batch-' + '-'.join(f"{row['id']}.{row['round']+1}" for row, _ in selected)
             try:
                 outcomes = self.send(self.home, config, message, batch) or {'delivery':'sent'}
@@ -250,7 +292,9 @@ def parse_command(text, quote=''):
     if not match:
         return None
     action, token = match.groups()
-    if not token and action not in {'全部已读','未读提醒'}:
+    # Bare read commands always confirm all, including replies quoting several
+    # items. A single item must be selected explicitly in the user's command.
+    if not token and action == '稍后提醒':
         quoted = set(re.findall(r'提醒编号：\s*(R\d+)', quote, re.I))
         if len(quoted) == 1:
             token = quoted.pop()
@@ -293,7 +337,7 @@ def acknowledge(home, action, token, platform, clock=time.time):
         names = '、'.join(f'R{i}' for i in ids)
         if action == '稍后提醒':
             return f'{names} 已延后 {minutes} 分钟提醒。'
-        return f'{names} 已确认已读，微信和 TG 均停止该版本的重复提醒；后台继续检索新内容。'
+        return f'{names} 已确认已读，所有已绑定通道均停止该版本的重复提醒；后台继续检索新内容。'
 
 
 def pre_dispatch(event=None, gateway=None, **kwargs):
@@ -305,7 +349,7 @@ def pre_dispatch(event=None, gateway=None, **kwargs):
         return None
     source = event.source
     platform = getattr(source.platform,'value',source.platform)
-    if platform not in {'weixin','telegram'} or source.chat_type != 'dm' or str(source.user_id) != str(source.chat_id):
+    if platform not in {'weixin','telegram','wecom_callback'} or source.chat_type != 'dm' or str(source.user_id) != str(source.chat_id):
         return None
     try:
         if getattr(source,'profile_route_rejected',False) or not gateway._is_user_authorized_for_source(source):
