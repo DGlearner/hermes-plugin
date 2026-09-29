@@ -572,3 +572,8 @@ chat. A single read-receipt footer follows all complete sections. Long text uses
 the existing numbered multipart delivery; it does not create another chat.
 All included notice occurrences are claimed in one transaction before sending;
 restart recovery and per-channel delivery deduplication apply to the batch.
+
+Reminder delivery now uses a Profile-wide cadence. Newly discovered items can
+wait up to one reminder interval so previously staggered task/review occurrences
+converge into one batch. Each kind has one heading; review records are separated
+by blank lines with one shared read/approval distinction and one read footer.

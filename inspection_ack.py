@@ -29,9 +29,21 @@ def clean_notice_message(message):
 
 
 def format_notice(report):
-    """Render one canonical report body without a duplicate model summary."""
-    title = {"task": "待办提醒", "review": "入库文件审核提醒"}.get(report.get("item_type"), "日报提醒")
-    return f"**{title}**\n\n{format_report(report)}\n\n**回复“已读”停止当前提醒。**"
+    return format_batch([report])
+
+
+def format_batch(reports):
+    """One heading per kind, complete original bodies, one read instruction."""
+    groups = {}
+    for report in reports:
+        kind = report.get('item_type', 'report')
+        groups.setdefault(kind, []).append(format_report(report))
+    titles = {'report': '日报提醒', 'task': '待办提醒', 'review': '文件审核提醒'}
+    sections = [f"**{titles[kind]}**\n\n" + '\n\n'.join(groups[kind])
+                for kind in ('report', 'task', 'review') if kind in groups]
+    if 'review' in groups:
+        sections.append('确认已读仅停止提醒，不代表批准入库。')
+    return '\n\n'.join(sections) + '\n\n**回复“已读”停止当前提醒。**'
 
 
 def format_report(report):
@@ -39,7 +51,7 @@ def format_report(report):
         status = {'open': '待开始', 'in_progress': '进行中', 'pending_review': '待审核'}.get(report['status'], report['status'])
         return f"{report['title']}\n\n任务：{report['task_no']}｜状态：{status}\n截止时间：{report.get('due_at') or '未设置'}\n\n正文：\n\n{report['content']}"
     if report.get("item_type") == "review":
-        return report["content"] + "\n\n确认已读仅停止提醒，不代表批准入库。"
+        return "\n".join(line.strip() for line in report["content"].splitlines())
     kind = report['report_type']
     subject = (report.get('employee_display_name') or report.get('employee_username')) if kind == 'personal' else (report.get('department_name') or report.get('department_code')) if kind == 'department' else '公司'
     author = report.get('author_display_name') or report.get('author_username') or '未提供'
@@ -139,6 +151,11 @@ class AckInspectionRunner:
         if schedule.in_quiet_hours(now):
             result['status'] = 'quiet_deferred'
             return result
+        # One Profile-wide cadence coalesces notices whose individual deadlines
+        # differ. Newly found items wait at most one reminder interval.
+        if float(get_meta(db, 'batch_next_send', 0)) > now:
+            result['reminders'] = []
+            return result
         emitted = []
         selected = []
         for row in unread:
@@ -179,10 +196,10 @@ class AckInspectionRunner:
             # Claim the entire batch before external I/O. A restart cannot replay
             # only half of a batch, and the Profile lock serializes read receipts.
             with db:
+                put_meta(db, 'batch_next_send', now+interval)
                 for row, _ in selected:
                     db.execute('UPDATE notices SET round=?,next_send=?,sent_day=?,sent_today=? WHERE id=?', (row['round']+1, now+interval, day, row['sent_today']+1 if row['sent_day']==day else 1, row['id']))
-            footer = '**回复“已读”停止当前提醒。**'
-            message = '\n\n'.join(text.removesuffix('\n\n'+footer) for _, text in selected) + '\n\n'+footer
+            message = format_batch([json.loads(row['payload']) for row, _ in selected])
             batch = 'ack-batch-' + '-'.join(f"{row['id']}.{row['round']+1}" for row, _ in selected)
             try:
                 outcomes = self.send(self.home, config, message, batch) or {'delivery':'sent'}

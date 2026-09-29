@@ -32,7 +32,7 @@ class AckTests(unittest.TestCase):
   self.run_tick();self.ack(token='R1');self.runner=AckInspectionRunner(self.home,self.query,self.model,self.send,lambda:self.now)
   self.run_tick(180);self.assertEqual(len(self.sent),1);self.assertIn('已确认',self.ack(token='R1'))
  def test_edit_gets_new_receipt(self):
-  self.run_tick();self.ack();self.reports[0]['version']=2;self.run_tick(120)
+  self.run_tick();self.ack();self.reports[0]['version']=2;self.run_tick(120);self.run_tick(60)
   self.assertIn('**日报提醒**',self.sent[-1][0]);self.assertIn('**回复“已读”停止当前提醒。**',self.sent[-1][0]);self.assertNotIn('R2',self.sent[-1][0]);self.assertEqual(self.models,2)
  def test_plain_ack_clears_multiple(self):
   self.reports.append(dict(self.reports[0],department_code='sales'));self.run_tick()
