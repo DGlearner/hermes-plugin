@@ -317,8 +317,18 @@ def summarize_reports(home, changes):
     return message
 
 
+class ItemNotification(str):
+    """String-compatible message carrying prepacked, whole-item pages."""
+    def __new__(cls, parts):
+        obj = super().__new__(cls, "\n\n".join(parts))
+        obj.parts = tuple(parts)
+        return obj
+
+
 def split_notification(message, limit=1500):
     """Preserve the entire body; both channels receive numbered text parts."""
+    if isinstance(message, ItemNotification):
+        return list(message.parts)
     if len(message) <= limit:
         return [message]
     chunks = [message[i:i + limit] for i in range(0, len(message), limit)]

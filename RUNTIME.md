@@ -577,3 +577,12 @@ Reminder delivery now uses a Profile-wide cadence. Newly discovered items can
 wait up to one reminder interval so previously staggered task/review occurrences
 converge into one batch. Each kind has one heading; review records are separated
 by blank lines with one shared read/approval distinction and one read footer.
+
+Structured inspection notifications pack whole items into pages with a 1500
+character soft budget including headings and read-receipt footer. An item that
+would overflow moves wholly to the next page. One item exceeding the budget is
+sent alone intact; delivery still depends on the actual channel accepting it.
+The transport preserves these prepared pages and per-page/channel deduplication.
+The crz pilot uses one scheduler job and one two-minute query watermark for all
+three sources (today reports, all outstanding tasks, authorized review queue).
+Queries run within the same Profile scope in one cycle, not as separate jobs.

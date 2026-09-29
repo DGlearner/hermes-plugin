@@ -12,7 +12,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from .profile_inspection import InspectionConfig
-from .daily_inspection import fingerprint, report_key
+from .daily_inspection import fingerprint, report_key, ItemNotification
 
 
 def clean_notice_message(message):
@@ -32,8 +32,7 @@ def format_notice(report):
     return format_batch([report])
 
 
-def format_batch(reports):
-    """One heading per kind, complete original bodies, one read instruction."""
+def _render_page(reports):
     groups = {}
     for report in reports:
         kind = report.get('item_type', 'report')
@@ -44,6 +43,25 @@ def format_batch(reports):
     if 'review' in groups:
         sections.append('确认已读仅停止提醒，不代表批准入库。')
     return '\n\n'.join(sections) + '\n\n**回复“已读”停止当前提醒。**'
+
+
+def format_batch(reports, limit=1500):
+    """Pack complete items, counting headings/footer in the soft page limit.
+
+    A single oversized item occupies its own page without loss or slicing.
+    ItemNotification prevents the transport from slicing these pages again.
+    """
+    ordered = [r for kind in ('report', 'task', 'review') for r in reports
+               if r.get('item_type', 'report') == kind]
+    pages, current = [], []
+    for report in ordered:
+        if current and len(_render_page(current + [report])) > limit:
+            pages.append(_render_page(current))
+            current = []
+        current.append(report)
+    if current:
+        pages.append(_render_page(current))
+    return ItemNotification(pages)
 
 
 def format_report(report):
