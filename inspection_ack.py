@@ -17,6 +17,9 @@ from .profile_inspection import InspectionConfig
 from .daily_inspection import fingerprint, report_key, ItemNotification
 
 
+ACK_FOOTER = '\n\n**回复“已读 R编号”确认单项；回复“全部已读”或“已读”确认全部。**'
+
+
 def clean_notice_message(message):
     """Hide internal notice ids while keeping legacy cached bodies readable."""
     lines = []
@@ -57,14 +60,49 @@ def _render_page(reports, *, flush_left=False):
                 for kind in ('report', 'task', 'review') if kind in groups]
     if 'review' in groups:
         sections.append('确认已读仅停止提醒，不代表批准入库。')
-    return '\n\n'.join(sections) + '\n\n**回复“已读 R编号”确认单项；回复“全部已读”或“已读”确认全部。**'
+    return '\n\n'.join(sections) + ACK_FOOTER
+
+
+def _split_report_page(page, notice_id, *, limit, byte_limit):
+    """Split only an oversized report; every page refers to the same receipt."""
+    receipt = f'[R{notice_id}]\n' if notice_id is not None else ''
+    body = page.removeprefix('**日报提醒**\n\n' + receipt).removesuffix(ACK_FOOTER)
+
+    def heading(part, total):
+        return f'**日报提醒（第 {part}/{total} 部分）**\n\n' + receipt
+
+    # Reserve the maximum possible digit width before splitting, so adding the
+    # final page counts, receipt and footer cannot exceed either page budget.
+    digits = '9' * len(str(len(body)))
+    overhead = heading(digits, digits) + ACK_FOOTER
+    byte_budget = byte_limit - len(overhead.encode('utf-8'))
+    char_budget = limit - len(overhead)
+    if byte_budget < 4 or char_budget < 1:
+        raise ValueError('report notification page limit is too small')
+    chunks = []
+    while body:
+        prefix = body[:char_budget].encode('utf-8')[:byte_budget].decode('utf-8', errors='ignore')
+        end = len(prefix)
+        if end < len(body):
+            # Keep paragraphs, then lines together where possible. A single
+            # oversized line is cut only between complete Unicode characters.
+            paragraph = prefix.rfind('\n\n')
+            line = prefix.rfind('\n')
+            if paragraph >= 0:
+                end = paragraph + 2
+            elif line >= 0:
+                end = line + 1
+        chunks.append(body[:end])
+        body = body[end:]
+    return [heading(i + 1, len(chunks)) + chunk + ACK_FOOTER
+            for i, chunk in enumerate(chunks)]
 
 
 def format_batch(reports, limit=1500, *, notice_ids=None, byte_limit=None, flush_left=False):
     """Pack complete items, counting headings/footer in the soft page limit.
 
-    A single oversized item occupies its own page without loss or slicing.
-    ItemNotification prevents the transport from slicing these pages again.
+    Oversized reports are split when a WeCom byte budget is supplied. Other
+    oversized items remain whole. The transport preserves these prepared pages.
     """
     # IDs come only from the local ledger, never from MCP content or position.
     if notice_ids is not None and len(notice_ids) != len(reports):
@@ -75,6 +113,15 @@ def format_batch(reports, limit=1500, *, notice_ids=None, byte_limit=None, flush
                if r.get('item_type', 'report') == kind]
     pages, current = [], []
     for report in ordered:
+        single = _render_page([report], flush_left=flush_left)
+        if (byte_limit and report.get('item_type', 'report') == 'report'
+                and len(single.encode('utf-8')) > byte_limit):
+            if current:
+                pages.append(_render_page(current, flush_left=flush_left))
+                current = []
+            pages.extend(_split_report_page(single, report['_notice_id'],
+                                            limit=limit, byte_limit=byte_limit))
+            continue
         candidate = _render_page(current + [report], flush_left=flush_left)
         if current and (len(candidate) > limit or (byte_limit and len(candidate.encode('utf-8')) > byte_limit)):
             pages.append(_render_page(current, flush_left=flush_left))
