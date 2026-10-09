@@ -4,6 +4,8 @@ import asyncio
 import re
 from functools import wraps
 
+from .report_display import render_report_text
+
 
 def split_reply(content, limit=2000):
     """Preserve all text while staying below WeCom's 2048 UTF-8 byte cap."""
@@ -32,7 +34,7 @@ def patch_reply_delivery(cls):
 
     @wraps(original)
     async def send(adapter, chat_id, content, reply_to=None, metadata=None):
-        for part in split_reply(content):
+        for part in split_reply(render_report_text(content)):
             result = await original(adapter, chat_id, part, reply_to=reply_to, metadata=metadata)
             if not result.success:
                 return result

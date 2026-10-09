@@ -53,7 +53,17 @@ class ReportNotificationPackingTests(unittest.TestCase):
         self.assertGreater(len(template.encode('utf-8')), 4000)
         _, chunks = self.assert_complete(self.report(template))
         for title in re.findall(r'^## .+$', template, flags=re.M):
-            self.assertEqual(sum(title in chunk for chunk in chunks), 1)
+            self.assertEqual(sum(title.removeprefix('## ') in chunk for chunk in chunks), 1)
+
+    def test_wecom_report_display_keeps_source_and_code_unchanged(self):
+        content = '# 工作进展同步日报\n| 同步内容 | 内容 |\n|---|---|\n| 当前状态 | 按计划 |\n\n```python\ndef run():\n    return "**text**"\n```'
+        report = self.report(content)
+        rendered = format_batch([report], notice_ids=[79], flush_left=True, byte_limit=4000)
+        self.assertIn('当前状态：按计划', rendered)
+        self.assertNotIn('|---|', rendered)
+        self.assertIn('    return "**text**"', rendered)
+        self.assertEqual(report['content'], content)
+        self.assertIn('| 同步内容 | 内容 |', format_batch([report], notice_ids=[79]))
 
     def test_large_metadata_and_many_page_digits_stay_within_budget(self):
         report = self.report('中文😀' * 15000)

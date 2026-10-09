@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from .profile_inspection import InspectionConfig
 from .daily_inspection import fingerprint, report_key, ItemNotification
+from .report_display import render_report_text
 
 
 ACK_FOOTER = '\n\n**回复“已读 R编号”确认单项；回复“全部已读”或“已读”确认全部。**'
@@ -41,8 +42,8 @@ def _render_page(reports, *, flush_left=False):
     groups = {}
     for report in reports:
         kind = report.get('item_type', 'report')
-        body = format_report(report)
-        if flush_left:
+        body = format_report(report, plain_text=flush_left and kind == 'report')
+        if flush_left and kind != 'report':
             # Keep visible numbering without triggering Markdown list indentation.
             lines = []
             for line in body.splitlines():
@@ -132,7 +133,7 @@ def format_batch(reports, limit=1500, *, notice_ids=None, byte_limit=None, flush
     return ItemNotification(pages)
 
 
-def format_report(report):
+def format_report(report, *, plain_text=False):
     if report.get('item_type') == 'task':
         status = {'open': '待开始', 'in_progress': '进行中', 'pending_review': '待审核'}.get(report['status'], report['status'])
         return f"{report['title']}\n\n任务：{report['task_no']}\n\n状态：{status}\n\n截止时间：{report.get('due_at') or '未设置'}\n\n正文：\n\n{report['content']}"
@@ -157,7 +158,8 @@ def format_report(report):
     subject = (report.get('employee_display_name') or report.get('employee_username')) if kind == 'personal' else (report.get('department_name') or report.get('department_code')) if kind == 'department' else '公司'
     author = report.get('author_display_name') or report.get('author_username') or '未提供'
     title = {'personal': '个人日报', 'department': '部门日报', 'company': '公司日报'}[kind]
-    body = '\n'.join(line.lstrip() for line in report['content'].split('\n'))
+    body = (render_report_text(report['content'], known_report=True) if plain_text
+            else '\n'.join(line.lstrip() for line in report['content'].split('\n')))
     return f"{title}｜{subject}\n\n日期：{report['report_date']}｜发布人：{author}\n\n正文：\n\n{body}"
 
 
