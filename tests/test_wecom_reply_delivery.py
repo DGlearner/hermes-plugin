@@ -2,9 +2,23 @@ import unittest
 from types import SimpleNamespace
 import test_inspection_ack
 from ack_test.wecom_binding import split_reply, patch_reply_delivery
-from ack_test.report_display import render_report_text
+from ack_test.wecom_display import render_wecom_text
 
 class ReplyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_normal_reply_is_rendered_before_sending(self):
+        class Adapter:
+            def __init__(self): self.sent = []
+            async def send(self, chat_id, content, reply_to=None, metadata=None):
+                self.sent.append((content, reply_to, metadata))
+                return SimpleNamespace(success=True)
+        patch_reply_delivery(Adapter)
+        adapter = Adapter()
+        source = '## 两个信号\n' + '- **需求：** 上升🙂\n' * 300
+        await adapter.send('test', source, reply_to='original', metadata={'key': 'value'})
+        self.assertEqual(''.join(item[0] for item in adapter.sent), render_wecom_text(source))
+        self.assertTrue(all(len(item[0].encode('utf-8')) <= 2000 for item in adapter.sent))
+        self.assertTrue(all(item[1:] == ('original', {'key': 'value'}) for item in adapter.sent))
+
     def test_lossless_utf8_and_paragraphs(self):
         for text in ['简短回复', ('中文🙂abc\n\n' * 1000), '汉' * 3000, 'a' * 5000]:
             parts = split_reply(text)
@@ -38,6 +52,6 @@ class ReplyTests(unittest.IsolatedAsyncioTestCase):
         content = '# 工作进展同步日报\n\n| 事项 | 负责人 |\n|---|---|\n' + '| 交付🙂 | 本人 |\n' * 200
         await adapter.send('test', content)
         self.assertGreater(len(adapter.sent), 1)
-        self.assertEqual(''.join(adapter.sent), render_report_text(content))
+        self.assertEqual(''.join(adapter.sent), render_wecom_text(content))
         self.assertEqual(''.join(adapter.sent).count('事项：交付🙂\n负责人：本人'), 200)
         self.assertTrue(all(len(part.encode('utf-8')) <= 2000 for part in adapter.sent))

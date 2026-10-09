@@ -90,19 +90,19 @@ def _cells(line):
     return cells if len(cells) >= 2 else None
 
 
-def _table(lines, index):
+def _table(lines, index, inline=_inline):
     headers = _cells(lines[index])
     if not headers or index + 1 >= len(lines):
         return None
     # Drafts sometimes omit the header/separator for this fixed key/value table.
     # Recognize only the known template fields, never arbitrary pipe-delimited text.
-    if len(headers) == 2 and re.sub(r"\s", "", _inline(headers[0])) in _FIELDS:
+    if len(headers) == 2 and re.sub(r"\s", "", inline(headers[0])) in _FIELDS:
         end, rows = index, []
         while end < len(lines):
             cells = _cells(lines[end])
-            if not cells or len(cells) != 2 or re.sub(r"\s", "", _inline(cells[0])) not in _FIELDS:
+            if not cells or len(cells) != 2 or re.sub(r"\s", "", inline(cells[0])) not in _FIELDS:
                 break
-            rows.append(f"{_inline(cells[0])}：{_inline(cells[1])}")
+            rows.append(f"{inline(cells[0])}：{inline(cells[1])}")
             end += 1
         if len(rows) >= 2:
             return "\n".join(rows), end
@@ -118,12 +118,12 @@ def _table(lines, index):
         end += 1
     if not rows:
         return None
-    headers = [_inline(cell) for cell in headers]
+    headers = [inline(cell) for cell in headers]
     fields = (len(headers) == 2 and headers[0] in {"同步内容", "字段", "项目", "项目／事项", "项目/事项"}
               and headers[1] in {"填写说明", "内容", "说明", "进展", "填写内容"})
     blocks = []
     for row in rows:
-        row = [_inline(cell) for cell in row]
+        row = [inline(cell) for cell in row]
         if fields:
             blocks.append(f"{row[0].rstrip('：:')}：{row[1]}")
         else:
@@ -139,6 +139,10 @@ def render_report_text(content, *, known_report=False):
     """
     if not isinstance(content, str) or not (known_report or _is_report(content)):
         return content
+    return _render_text(content)
+
+
+def _render_text(content, *, inline=_inline, plain=False):
     lines, output, index = content.splitlines(), [], 0
     while index < len(lines):
         line = lines[index]
@@ -155,24 +159,42 @@ def render_report_text(content, *, known_report=False):
             while end < len(lines) and not closing.fullmatch(lines[end]):
                 end += 1
             body = "\n".join(lines[index + 1:end])
-            if end < len(lines) and fence[2].strip().lower() in {"", "markdown", "md", "text", "plaintext"} and _is_report(body):
+            if plain:
+                language = fence[2].strip().lower()
+                if language in {"markdown", "md"} or (language in {"", "text", "plaintext"} and _is_report(body)):
+                    output.append(_render_text(body, inline=inline, plain=True))
+                else:
+                    output.append(body)
+            elif end < len(lines) and fence[2].strip().lower() in {"", "markdown", "md", "text", "plaintext"} and _is_report(body):
                 output.append(render_report_text(body, known_report=True))
             else:
                 output.extend(lines[index:min(end + 1, len(lines))])
             index = end + 1
             continue
-        table = _table(lines, index)
+        table = _table(lines, index, inline=inline)
         if table:
             block, index = table
             output.append(block)
+            continue
+        if plain and line.strip() and index + 1 < len(lines) and re.fullmatch(r"\s*=+\s*", lines[index + 1]):
+            output.append(inline(line))
+            index += 2
             continue
         if re.fullmatch(r"\s*(?:-{3,}|\*{3,}|_{3,})\s*", line):
             output.append("")
         else:
             line = re.sub(r"^\s*#{1,6}\s+", "", line)
-            line = re.sub(r"^\s*[-+*]\s+", "• ", line)
+            if plain:
+                line = re.sub(r"^\s*(?:>\s?)+", "", line)
+                line = re.sub(r"\s+#+\s*$", "", line) if re.match(r"^\s*#{1,6}\s+", lines[index]) else line
+                line = re.sub(r"^(\s*)[-+*]\s+\[([ xX])\]\s*",
+                              lambda m: m[1] + ("☑ " if m[2].lower() == "x" else "☐ "), line)
+            if plain:
+                line = re.sub(r"^(\s*)[-+*]\s+", r"\1• ", line)
+            else:
+                line = re.sub(r"^\s*[-+*]\s+", "• ", line)
             line = re.sub(r"^(\d+)[.)](?=\s)", r"\1．", line)
-            line = re.sub(r"^\s*>\s?", "", line)
-            output.append(_inline(line))
+            line = re.sub(r"^\s*(?:>\s?)+" if plain else r"^\s*>\s?", "", line)
+            output.append(inline(line))
         index += 1
-    return "\n".join(output)
+    return "\n".join(output) + ("\n" if plain and content.endswith("\n") else "")
