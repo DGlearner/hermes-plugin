@@ -42,6 +42,7 @@ class EnrollmentTests(unittest.TestCase):
         (a / 'inspection/ack.sqlite3').write_bytes(b'untouched')
         self.sync([self.route(a)])
         self.assertEqual(self.config(a)['expected_username'], 'a')
+        self.assertTrue(self.config(a)['include_review_results'])
         self.assertEqual(self.config(b)['expected_username'], 'b')
         self.assertEqual(self.config(b)['notification_targets'], [])
         self.assertFalse(self.jobs[b.name]); self.assertTrue(self.jobs[a.name])
@@ -69,9 +70,10 @@ class EnrollmentTests(unittest.TestCase):
         self.sync([self.route(a)])
         self.assertEqual(self.config(a)['interval_minutes'], 2)
         self.assertEqual(self.config(a)['acknowledgement']['reminder_minutes'], 3)
-        cfg = self.config(a); cfg['enabled'] = False
+        cfg = self.config(a); cfg['enabled'] = False; cfg['include_review_results'] = False
         (a / 'inspection.json').write_text(json.dumps(cfg))
         self.sync([self.route(a)]); self.assertFalse(self.jobs[a.name])
+        self.assertFalse(self.config(a)['include_review_results'])
         self.sync([]); self.sync([self.route(a)])
         self.assertFalse(self.jobs[a.name])
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .profile_inspection import InspectionConfig
-from .daily_inspection import fingerprint, report_key, ItemNotification
+from .daily_inspection import fingerprint, report_key, ItemNotification, REPORT_NOTIFICATION_POLICY
 from .report_display import render_report_text
 
 
@@ -218,7 +218,8 @@ class AckInspectionRunner:
         if interval < 60:
             raise ValueError('invalid reminder interval')
         last = get_meta(db, 'last_checked_at')
-        due = force or schedule.due(float(last) if last else None, now)
+        policy_changed = get_meta(db, 'report_notification_policy') != REPORT_NOTIFICATION_POLICY
+        due = force or policy_changed or schedule.due(float(last) if last else None, now)
         day = schedule.localize(now).date().isoformat()
         result = {'status': 'not_due', 'queried': False}
         if due:
@@ -247,6 +248,7 @@ class AckInspectionRunner:
                 put_meta(db, 'query_ok', 1)
                 put_meta(db, 'query_failures', 0)
                 put_meta(db, 'query_retry_at', 0)
+                put_meta(db, 'report_notification_policy', REPORT_NOTIFICATION_POLICY)
             result = {'status': 'checked', 'queried': True, 'report_count': sum(r.get('item_type') not in {'task', 'review'} for r in reports), 'task_count': sum(r.get('item_type') == 'task' for r in reports), 'review_count': sum(r.get('item_type') == 'review' for r in reports), 'checked_at': now}
         # Never repeat cached data after a failed query or beyond one polling interval.
         last = get_meta(db, 'last_checked_at')

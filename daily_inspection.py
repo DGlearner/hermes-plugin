@@ -12,8 +12,13 @@ import re
 import sqlite3
 import time
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 from .profile_inspection import InspectionConfig
+from .notification_errors import NotificationRejected
+
+
+REPORT_NOTIFICATION_POLICY = "department-routing-v1"
 
 
 class UncertainDelivery(Exception):
@@ -161,7 +166,7 @@ class DailyInspectionRunner:
             db.execute("INSERT INTO reports VALUES (?,?,NULL) ON CONFLICT(item_key) DO UPDATE SET observed=excluded.observed", (item["key"],item["fingerprint"]))
         # Refresh deferred/retrying batches against today's authorized results.
         # Removed or permission-revoked data is never delivered from stale cache.
-        if pending:
+        for pending in db.execute("SELECT * FROM batches WHERE state='pending' ORDER BY rowid").fetchall():
             old=json.loads(pending["items"])
             fresh=[current[x["key"]] for x in old if x["key"] in current]
             if fresh != old:
@@ -220,12 +225,25 @@ def query_reports(home, config, day):
         user=call("get_current_user",{})
         if user.get("username") != config["expected_username"]:
             raise ValueError("Profile identity mismatch")
-        result=call("list_daily_reports",{"start_date":day,"end_date":day,"limit":100})
-        reports=result.get("reports")
-        if not isinstance(reports,list) or result.get("count") != len(reports) or len(reports)>=100:
-            raise ValueError("incomplete report snapshot")
-        if any(r.get("report_date") != day for r in reports):
-            raise ValueError("unexpected report date")
+        try:
+            current_day = date.fromisoformat(day)
+        except ValueError as exc:
+            raise ValueError("invalid inspection date") from exc
+        reports = []
+        # Preserve the existing production lookback for late publications and
+        # transient failures, applying the notification policy to every day.
+        for offset in range(3):
+            report_day = (current_day - timedelta(days=offset)).isoformat()
+            result=call("list_daily_reports",{"start_date":report_day,"end_date":report_day,"limit":100,
+                                               "notification_only":True})
+            if result.get("notification_policy") != REPORT_NOTIFICATION_POLICY:
+                raise ValueError("report notification policy is not supported")
+            rows=result.get("reports")
+            if not isinstance(rows,list) or result.get("count") != len(rows) or len(rows)>=100:
+                raise ValueError("incomplete report snapshot")
+            if any(r.get("report_date") != report_day for r in rows):
+                raise ValueError("unexpected report date")
+            reports.extend(rows)
         if config.get("include_tasks", False):
             reports = reports + query_all_tasks(call)
         if config.get("include_reviews", False):
@@ -352,7 +370,7 @@ def split_notification(message, limit=1500):
     return [f"【巡检内容 {i + 1}/{len(chunks)}】\n{chunk}" for i, chunk in enumerate(chunks)]
 
 
-def send_notification(home, config, message, batch_id):
+def send_notification(home, config, message, batch_id, *, retry_rejected=False):
     """Deliver once per bound target; one channel failure cannot block others."""
     targets = config.get("notification_targets") or [config["notification_target"]]
     unique = {}
@@ -364,6 +382,15 @@ def send_notification(home, config, message, batch_id):
     directory.mkdir(mode=0o700, exist_ok=True)
     path = directory / "deliveries.sqlite3"
     outcomes = {}
+    def remember(platform, status):
+        previous = outcomes.get(platform, "sent")
+        # An uncertain part must dominate a rejected part: the full result may
+        # not be replayed or acknowledged based on only part of its delivery.
+        if retry_rejected:
+            rank = {"sent": 0, "rejected": 1, "sending": 2, "uncertain": 2}
+            outcomes[platform] = status if rank.get(status, 2) > rank.get(previous, 2) else previous
+        else:
+            outcomes[platform] = status if previous == "sent" else previous
     with contextlib.closing(sqlite3.connect(path, timeout=10)) as db:
         db.execute("CREATE TABLE IF NOT EXISTS deliveries(batch_id TEXT, platform TEXT, peer TEXT, state TEXT, PRIMARY KEY(batch_id,platform,peer))")
         db.commit()
@@ -374,9 +401,11 @@ def send_notification(home, config, message, batch_id):
             for (platform, peer), target in unique.items():
                 with db:
                     claimed = db.execute("INSERT OR IGNORE INTO deliveries VALUES (?,?,?,'sending')", (part_id, platform, peer)).rowcount
+                    if not claimed and retry_rejected:
+                        claimed = db.execute("UPDATE deliveries SET state='sending' WHERE batch_id=? AND platform=? AND peer=? AND state='rejected'", (part_id, platform, peer)).rowcount
                 if not claimed:
                     status = db.execute("SELECT state FROM deliveries WHERE batch_id=? AND platform=? AND peer=?", (part_id, platform, peer)).fetchone()[0]
-                    outcomes[platform] = status if outcomes.get(platform, "sent") == "sent" else outcomes[platform]
+                    remember(platform, status)
                     continue
                 try:
                     _send_notification_target(home, target, part, part_id)
@@ -385,13 +414,13 @@ def send_notification(home, config, message, batch_id):
                     # Keep the user-facing outcome generic, but retain a safe
                     # exception class for diagnosing channel-specific failures.
                     import logging
+                    status = "rejected" if retry_rejected and isinstance(exc, NotificationRejected) else "uncertain"
                     logging.getLogger(__name__).warning(
-                        "profile inspection delivery uncertain platform=%s error=%s",
-                        platform, type(exc).__name__)
-                    status = "uncertain"
+                        "profile inspection delivery %s platform=%s error=%s",
+                        status, platform, type(exc).__name__)
                 with db:
                     db.execute("UPDATE deliveries SET state=? WHERE batch_id=? AND platform=? AND peer=?", (status, part_id, platform, peer))
-                outcomes[platform] = status if outcomes.get(platform, "sent") == "sent" else outcomes[platform]
+                remember(platform, status)
     if any(status != "sent" for status in outcomes.values()):
         error = UncertainDelivery("one_or_more_channels_unconfirmed")
         error.outcomes = outcomes
@@ -406,7 +435,7 @@ def _send_notification_target(home, target, message, batch_id):
     with profile_scope(root):
         routes=load_gateway_config().profile_routes
     if not any(r.profile==home.name and r.platform==target["platform"] and str(r.chat_id)==target["chat_id"] for r in routes):
-        raise UncertainDelivery("route_changed")
+        raise NotificationRejected("route_changed")
     if target["platform"] == "weixin":
         binding=active_binding(root,home.name,target["chat_id"])
         send_report(root,{"profile":home.name,"peer":target["chat_id"],"id":batch_id,"binding_identity":binding_identity(binding)},message)
@@ -428,11 +457,21 @@ def main(home):
     if home.parent.name != "profiles" or not home.name.startswith("employee-"):
         raise ValueError("employee Profile required")
     config=json.loads((home / "inspection.json").read_text())
-    if config.get("acknowledgement", {}).get("enabled"):
-        from .inspection_ack import AckInspectionRunner
-        result=AckInspectionRunner(home,query_reports,summarize_reports,send_notification).run(config)
-    else:
-        result=DailyInspectionRunner(home,query_reports,summarize_reports,send_notification).run(config)
+    try:
+        if config.get("acknowledgement", {}).get("enabled"):
+            from .inspection_ack import AckInspectionRunner
+            result=AckInspectionRunner(home,query_reports,summarize_reports,send_notification).run(config)
+        else:
+            result=DailyInspectionRunner(home,query_reports,summarize_reports,send_notification).run(config)
+    except Exception:
+        result={"status": "failed"}
+    # Review results have independent progress: a failed report query must not
+    # suppress a notice to the uploader, or cause an already sent notice to repeat.
+    try:
+        from .review_result_delivery import run_review_result_notifications
+        result["review_results"]=run_review_result_notifications(home, config)
+    except Exception:
+        result["review_results"]={"status": "failed"}
     directory=home / "inspection"
     directory.mkdir(mode=0o700,exist_ok=True)
     path=directory / "last_result.json"

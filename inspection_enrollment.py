@@ -11,7 +11,7 @@ from pathlib import Path
 DEFAULTS = {
     'timezone': 'Asia/Shanghai', 'interval_minutes': 30,
     'work_hours': {'start': '09:00', 'end': '18:00'},
-    'include_tasks': True, 'include_reviews': True,
+    'include_tasks': True, 'include_reviews': True, 'include_review_results': True,
     'test_notify_each_check': False,
     'acknowledgement': {'enabled': True, 'reminder_minutes': 30,
                         'max_reminders_per_day': None, 'snooze_minutes': 30},
@@ -115,6 +115,7 @@ def sync_profile(home, defaults, routes, *, scheduler=ensure_job):
         raise ValueError('inspection identity mismatch')
     cfg = deepcopy(defaults)
     cfg.update(existing)
+    cfg.setdefault('include_review_results', True)
     cfg['acknowledgement'] = {**defaults['acknowledgement'], **existing.get('acknowledgement', {})}
     # Per-profile frequencies, quiet times and explicit opt-outs survive syncing.
     desired = existing.get('enrollment', {}).get('desired_enabled', existing.get('enabled', True))

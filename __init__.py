@@ -3863,12 +3863,17 @@ def _make_handler(endpoint: str, timeout: float, tool_name: str) -> Callable[...
     def _handler(arguments: dict[str, Any], **kwargs: Any) -> str:
         if not isinstance(arguments, dict):
             return _error("Tool arguments must be a JSON object", error_type="invalid_arguments")
+        if tool_name == "acknowledge_knowledge_review_notification":
+            return _error("Only the native delivery worker may confirm a sent review notification.",
+                          error_type="native_delivery_required")
         from .report_workflow import REPORT_TOOLS, call_tool
         if tool_name in REPORT_TOOLS:
+            # Allow the report check to finish before the chat request times out.
+            report_timeout = 300.0 if tool_name == "validate_daily_report_draft" else timeout
             return call_tool(
                 tool_name, arguments, session_id=str(kwargs.get("session_id") or ""),
                 resolve_home=_current_profile_home,
-                call=lambda: _call_mcp(endpoint, timeout, tool_name, arguments),
+                call=lambda: _call_mcp(endpoint, report_timeout, tool_name, arguments),
             )
         if tool_name in _KNOWLEDGE_SEARCH_TOOLS:
             session_id = str(kwargs.get("session_id") or kwargs.get("task_id") or "").strip()

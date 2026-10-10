@@ -75,12 +75,14 @@ class NativeReportWorkflowTests(unittest.TestCase):
             self.assertLessEqual(len(plugin._employee_policy_prompt({})), prompt_section.max_chars)
 
             server_calls = []
+            server_timeouts = []
             report = "# 工作进展同步日报\n\n| 同步内容 | 内容 |\n|---|---|\n| 当前状态 | 按计划推进 |\n\n完整的测试日报正文。"
             validation = {"passed": True, "draft": {"draft_id": "draft-runtime", "version": 1, "content": report},
                           "confirmation_token": "test-server-token", "content_digest": "test-server-digest"}
 
             def fake_mcp(endpoint, timeout, name, args):
                 server_calls.append((name, args))
+                server_timeouts.append(timeout)
                 if name == "validate_daily_report_draft":
                     return json.dumps(validation, ensure_ascii=False)
                 return '{"report":{"version":1}}'
@@ -132,6 +134,7 @@ class NativeReportWorkflowTests(unittest.TestCase):
                     self.assertIn("error", json.loads(foreign))
             self.assertEqual([name for name, _ in server_calls],
                              ["validate_daily_report_draft", "publish_daily_report_draft"] * 3)
+            self.assertEqual(server_timeouts, [300.0, 60.0] * 3)
 
 
 if __name__ == "__main__":

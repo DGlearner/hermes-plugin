@@ -5,6 +5,7 @@ import re
 from functools import wraps
 
 from .wecom_display import render_wecom_text
+from .notification_errors import NotificationRejected
 
 
 def split_reply(content, limit=2000):
@@ -125,17 +126,26 @@ def send_notification(root, target, message):
     from .work_todos import profile_scope
     from gateway.config import load_gateway_config, Platform
     from plugins.platforms.wecom.callback_adapter import WecomCallbackAdapter
-    with profile_scope(root):
-        config = load_gateway_config().platforms.get(Platform.WECOM_CALLBACK)
-    if config is None or not config.enabled:
-        raise RuntimeError('wecom_unavailable')
-    adapter = WecomCallbackAdapter(config)
-    corp, separator, member = target['chat_id'].partition(':')
-    apps = [app for app in adapter._apps if app.get('corp_id') == corp]
-    if not separator or not member or len(apps) != 1:
-        raise RuntimeError('wecom_ambiguous_destination')
+    try:
+        with profile_scope(root):
+            config = load_gateway_config().platforms.get(Platform.WECOM_CALLBACK)
+        if config is None or not config.enabled:
+            raise NotificationRejected('wecom_unavailable')
+        adapter = WecomCallbackAdapter(config)
+        corp, separator, member = target['chat_id'].partition(':')
+        apps = [app for app in adapter._apps if app.get('corp_id') == corp]
+        if not separator or not member or len(apps) != 1:
+            raise NotificationRejected('wecom_ambiguous_destination')
+        payload = {'touser': member, 'msgtype': 'markdown',
+                   'agentid': int(apps[0]['agent_id']), 'markdown': {'content': str(message)}}
+    except NotificationRejected:
+        raise
+    except Exception:
+        raise NotificationRejected('wecom_setup_failed') from None
 
+    attempted = False
     async def send():
+        nonlocal attempted
         import httpx
         from .wecom_egress import RelayHTTPClient, relay_settings
         async with httpx.AsyncClient(timeout=20) as client:
@@ -143,13 +153,20 @@ def send_notification(root, target, message):
             relay = RelayHTTPClient(client, relay_url, relay_token)
             adapter._http_client = relay
             token = await adapter._get_access_token(apps[0])
+            attempted = True
             response = await relay.post('https://qyapi.weixin.qq.com/cgi-bin/message/send',
-                params={'access_token': token}, json={'touser': member, 'msgtype': 'markdown',
-                    'agentid': int(apps[0]['agent_id']), 'markdown': {'content': str(message)}})
+                params={'access_token': token}, json=payload)
             data = response.json()
-            if response.status_code != 200 or data.get('errcode') != 0 or data.get('invaliduser'):
-                raise RuntimeError('wecom_send_rejected')
+            if response.status_code != 200 or not isinstance(data, dict) or type(data.get('errcode')) is not int:
+                raise RuntimeError('wecom_unconfirmed_response')
+            if data['errcode'] != 0 or data.get('invaliduser'):
+                raise NotificationRejected('wecom_send_rejected')
     try:
         asyncio.run(send())
-    except Exception:
+    except NotificationRejected:
+        raise
+    except Exception as exc:
+        import httpx
+        if not attempted or isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+            raise NotificationRejected('wecom_not_sent') from None
         raise RuntimeError('wecom_delivery_failed') from None

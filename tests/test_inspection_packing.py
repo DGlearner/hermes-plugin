@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 import test_inspection_ack
 from ack_test.inspection_ack import format_batch
-from ack_test.daily_inspection import split_notification,send_notification,query_reports
+from ack_test.daily_inspection import split_notification,send_notification,query_reports,REPORT_NOTIFICATION_POLICY
 
 class PackingTests(unittest.TestCase):
  def test_wecom_lists_are_flush_left_without_losing_body(self):
@@ -63,9 +63,26 @@ class PackingTests(unittest.TestCase):
   calls=[]
   def call(endpoint,timeout,name,args):
    calls.append((name,args))
-   return json.dumps({'get_current_user':{'username':'crz','organization_role':'department_manager'},'list_daily_reports':{'reports':[],'count':0},'list_my_tasks':{'tasks':[],'total':0},'list_pending_knowledge_reviews':{'reviews':[],'count':0}}[name])
+   return json.dumps({'get_current_user':{'username':'crz','organization_role':'department_manager'},'list_daily_reports':{'reports':[],'count':0,'notification_policy':REPORT_NOTIFICATION_POLICY},'list_my_tasks':{'tasks':[],'total':0},'list_pending_knowledge_reviews':{'reviews':[],'count':0}}[name])
   with patch('ack_test.work_todos.profile_scope'),patch('ack_test._call_mcp',call,create=True),patch('ack_test.DEFAULT_ENDPOINT','test',create=True),patch('ack_test.ENDPOINT_ENV','INSPECTION_TEST_ENDPOINT',create=True),patch('ack_test._validate_endpoint',lambda s:s,create=True):
    self.assertEqual(query_reports(Path('/tmp'),{'expected_username':'crz','include_tasks':True,'include_reviews':True},'2026-09-29'),[])
-  self.assertEqual([c[0] for c in calls],['get_current_user','list_daily_reports','list_my_tasks','list_pending_knowledge_reviews'])
+  self.assertEqual([c[0] for c in calls],['get_current_user','list_daily_reports','list_daily_reports','list_daily_reports','list_my_tasks','list_pending_knowledge_reviews'])
   self.assertEqual(calls[1][1]['start_date'],'2026-09-29')
-  self.assertNotIn('start_date',calls[2][1]);self.assertNotIn('start_date',calls[3][1])
+  self.assertEqual(calls[2][1]['start_date'],'2026-09-28')
+  self.assertEqual(calls[3][1]['start_date'],'2026-09-27')
+  self.assertTrue(all(call[1]['notification_only'] for call in calls[1:4]))
+  self.assertNotIn('start_date',calls[4][1]);self.assertNotIn('start_date',calls[5][1])
+
+ def test_report_lookback_includes_previous_two_days(self):
+  calls=[]
+  def call(endpoint,timeout,name,args):
+   calls.append((name,args))
+   if name=='get_current_user': return json.dumps({'username':'crz','organization_role':'department_manager'})
+   if name=='list_daily_reports':
+    day=args['start_date']
+    return json.dumps({'reports':[dict(report_type='personal',employee_username='crz',report_date=day,content=day,version=1)],'count':1,'notification_policy':REPORT_NOTIFICATION_POLICY})
+   return json.dumps({'tasks':[],'total':0} if name=='list_my_tasks' else {'reviews':[],'count':0})
+  with patch('ack_test.work_todos.profile_scope'),patch('ack_test._call_mcp',call,create=True),patch('ack_test.DEFAULT_ENDPOINT','test',create=True),patch('ack_test.ENDPOINT_ENV','INSPECTION_TEST_ENDPOINT',create=True),patch('ack_test._validate_endpoint',lambda s:s,create=True):
+   rows=query_reports(Path('/tmp'),{'expected_username':'crz','include_tasks':False,'include_reviews':False},'2026-09-29')
+  self.assertEqual([r['report_date'] for r in rows],['2026-09-29','2026-09-28','2026-09-27'])
+  self.assertTrue(all(call[1]['notification_only'] for call in calls if call[0]=='list_daily_reports'))
